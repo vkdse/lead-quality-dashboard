@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lead Quality Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+/* ── tokens ── */
+:root {
+  --bg:#f5f4f0; --surface:#fff; --surface1:#f8f7f4;
+  --border:rgba(0,0,0,.09); --border-s:rgba(0,0,0,.16);
+  --text:#0b0b0b; --sec:#52514e; --muted:#898781;
+  --blue:#2a78d6; --teal:#1baf7a; --amber:#ba7517;
+  --red:#e34948; --gray:#73726c; --violet:#4a3aa7;
+  --r:8px;
+}
+@media(prefers-color-scheme:dark){:root{
+  --bg:#111110; --surface:#1c1c1a; --surface1:#252522;
+  --border:rgba(255,255,255,.09); --border-s:rgba(255,255,255,.16);
+  --text:#f5f4f0; --sec:#c3c2b7; --muted:#898781;
+  --blue:#3987e5; --teal:#199e70; --amber:#eda100;
+  --red:#e66767; --gray:#888780; --violet:#9085e9;
+}}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+a{color:var(--blue)}
+
+/* ── layout ── */
+.page{max-width:1120px;margin:0 auto;padding:2rem 1.25rem 4rem}
+
+/* ── loader ── */
+#loader{display:flex;flex-direction:column;align-items:center;
+  justify-content:center;min-height:60vh;gap:1rem}
+.spinner{width:36px;height:36px;border:3px solid var(--border-s);
+  border-top-color:var(--blue);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#loader p{color:var(--muted);font-size:13px}
+#dash{display:none}
+
+/* ── header ── */
+.dash-header{display:flex;justify-content:space-between;align-items:flex-end;
+  margin-bottom:2rem;flex-wrap:wrap;gap:.5rem}
+.dash-header h1{font-size:20px;font-weight:500}
+.dash-header p{font-size:12px;color:var(--muted);margin-top:3px}
+#last-updated{font-size:11px;color:var(--muted)}
+
+/* ── KPI row ── */
+.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:2rem}
+.kpi{background:var(--surface);border:0.5px solid var(--border);border-radius:12px;padding:.9rem 1.1rem}
+.kpi-lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+.kpi-val{font-size:26px;font-weight:500;line-height:1}
+.kpi-sub{font-size:11px;color:var(--sec);margin-top:4px}
+.kpi-target .kpi-val{color:var(--amber)}
+
+/* ── grid ── */
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:1.25rem;margin-bottom:1.25rem}
+.card{background:var(--surface);border:0.5px solid var(--border);border-radius:12px;padding:1.1rem 1.25rem}
+.card-t{font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:1rem}
+.cw{position:relative;width:100%}
+
+/* ── filter bar ── */
+.filter-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1.5rem;
+  background:var(--surface);border:0.5px solid var(--border);border-radius:12px;padding:.8rem 1rem}
+.filter-bar label{font-size:12px;color:var(--muted);margin-right:4px}
+select{font-size:12px;padding:3px 8px;border:0.5px solid var(--border-s);
+  border-radius:var(--r);background:var(--surface1);color:var(--text);cursor:pointer}
+.filter-grp{display:flex;align-items:center;gap:4px}
+
+/* ── tabs ── */
+.tabs{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:1rem}
+.tab{padding:4px 12px;border-radius:var(--r);border:0.5px solid var(--border-s);
+  font-size:12px;cursor:pointer;background:transparent;color:var(--sec);transition:all .1s}
+.tab:hover{background:var(--surface1)}
+.tab.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+
+/* ── horizontal bars ── */
+.hbar-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.hbl{font-size:11px;color:var(--sec);width:155px;flex-shrink:0;text-align:right;line-height:1.3}
+.hbl.w{width:195px}
+.hbt{flex:1;background:var(--bg);border-radius:3px;height:19px;position:relative;overflow:hidden}
+.hbf{height:100%;border-radius:3px;display:flex;align-items:center;padding-left:5px;transition:width .45s ease}
+.hbp{font-size:10px;font-weight:500;color:#fff;white-space:nowrap}
+.hbn{font-size:10px;color:var(--muted);width:44px;flex-shrink:0}
+
+/* ── scenario bars ── */
+.sc-row{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.sc-lbl{width:225px;flex-shrink:0;font-size:11px;color:var(--sec);line-height:1.4}
+.sc-lbl span{display:block;font-size:10px;color:var(--muted)}
+.sc-track{flex:1;background:var(--bg);border-radius:3px;height:23px;position:relative;overflow:visible}
+.sc-fill{height:100%;border-radius:3px;display:flex;align-items:center;justify-content:flex-end;padding-right:6px}
+.sc-pct{font-size:11px;font-weight:500;color:#fff}
+.sc-mark{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--amber);z-index:2;border-radius:1px}
+
+/* ── callout boxes ── */
+.insight{background:#eaf3de;border:0.5px solid #97c459;border-radius:var(--r);
+  padding:.7rem .9rem;margin-top:.9rem;font-size:12px;color:#27500a;line-height:1.6}
+.warn{background:#faeeda;border:0.5px solid #ef9f27;border-radius:var(--r);
+  padding:.7rem .9rem;margin-top:.5rem;font-size:12px;color:#633806;line-height:1.6}
+@media(prefers-color-scheme:dark){
+  .insight{background:#173404;border-color:#3b6d11;color:#c0dd97}
+  .warn{background:#412402;border-color:#854f0b;color:#fac775}
+}
+
+/* ── donut legend ── */
+.dl{font-size:11px;color:var(--sec);line-height:2}
+.dl-row{display:flex;align-items:center;gap:5px}
+.dl-sq{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+
+/* ── error banner ── */
+.err{background:#fcebeb;border:0.5px solid #f09595;border-radius:var(--r);
+  padding:1rem 1.25rem;color:#791f1f;font-size:13px;line-height:1.6;margin-bottom:1.5rem}
+
+/* ── footer ── */
+footer{margin-top:3rem;padding-top:1rem;border-top:0.5px solid var(--border);
+  display:flex;justify-content:space-between;font-size:11px;color:var(--muted);flex-wrap:wrap;gap:.5rem}
+</style>
+</head>
+<body>
+<div class="page">
+
+<div id="loader">
+  <div class="spinner"></div>
+  <p>Fetching lead data from Google Sheets…</p>
+</div>
+
+<div id="dash">
+
+  <div class="dash-header">
+    <div>
+      <h1>Lead quality dashboard</h1>
+      <p id="sub-head"></p>
+    </div>
+    <span id="last-updated"></span>
+  </div>
+
+  <div id="err-banner" style="display:none" class="err"></div>
+
+  <!-- KPI row -->
+  <div class="kpi-row">
+    <div class="kpi"><div class="kpi-lbl">Total leads</div><div class="kpi-val" id="k-total">—</div><div class="kpi-sub" id="k-range">—</div></div>
+    <div class="kpi"><div class="kpi-lbl">Closed rate (baseline)</div><div class="kpi-val" id="k-closed">—</div><div class="kpi-sub" id="k-cn">—</div></div>
+    <div class="kpi"><div class="kpi-lbl">Broad quality rate</div><div class="kpi-val" id="k-good">—</div><div class="kpi-sub">closed + EP steps</div></div>
+    <div class="kpi kpi-target"><div class="kpi-lbl">CPL uplift target</div><div class="kpi-val">9.6%</div><div class="kpi-sub">+20% → $33 CPL</div></div>
+  </div>
+
+  <!-- Filters -->
+  <div class="filter-bar">
+    <span style="font-size:12px;font-weight:500;color:var(--sec);margin-right:4px">Filter:</span>
+    <div class="filter-grp"><label>Partner</label><select id="f-partner"><option value="">All</option></select></div>
+    <div class="filter-grp"><label>Debt level</label><select id="f-debt"><option value="">All</option></select></div>
+    <div class="filter-grp"><label>Month</label><select id="f-month"><option value="">All</option></select></div>
+    <div class="filter-grp"><label>State</label><select id="f-state"><option value="">All</option></select></div>
+    <button id="reset-btn" style="margin-left:auto;font-size:12px;padding:3px 10px;
+      border:0.5px solid var(--border-s);border-radius:var(--r);background:transparent;
+      color:var(--sec);cursor:pointer">Reset filters</button>
+  </div>
+
+  <!-- Trend + Donut -->
+  <div class="grid2">
+    <div class="card">
+      <div class="card-t">Closed rate by month</div>
+      <div class="cw" style="height:195px"><canvas id="trendChart" role="img" aria-label="Line chart of monthly lead closed rate">Monthly closed rate trend.</canvas></div>
+    </div>
+    <div class="card">
+      <div class="card-t">Status breakdown</div>
+      <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+        <div class="cw" style="height:170px;width:170px;flex-shrink:0"><canvas id="donutChart" role="img" aria-label="Donut chart of lead status distribution">Lead call status distribution.</canvas></div>
+        <div class="dl" id="donut-legend"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Segment tabs -->
+  <div class="card" style="margin-bottom:1.25rem">
+    <div class="card-t">Segment analysis</div>
+    <div class="tabs">
+      <button class="tab on" onclick="showSeg('partner',this)">Traffic source</button>
+      <button class="tab" onclick="showSeg('widget',this)">Ad creative</button>
+      <button class="tab" onclick="showSeg('debt',this)">Debt level</button>
+      <button class="tab" onclick="showSeg('phone',this)">Phone score</button>
+      <button class="tab" onclick="showSeg('state',this)">Geography</button>
+      <button class="tab" onclick="showSeg('campaign',this)">Ad campaign</button>
+    </div>
+    <div id="seg-body"></div>
+  </div>
+
+  <!-- Scenario analysis -->
+  <div class="card" style="margin-bottom:1.25rem">
+    <div class="card-t">Q3 — paths to 9.6% quality target ($33 CPL)</div>
+    <div style="font-size:11px;color:var(--amber);font-weight:500;margin-bottom:.6rem">
+      Dashed line = 9.6% target
+    </div>
+    <div id="scenario-body"></div>
+    <div class="insight">
+      <strong>Lever 1 alone</strong> (drop Google Content Network) reaches 9.2% and grows absolute revenue ~4% — the CPL premium more than offsets the 21% volume loss.
+      Combine with the <strong>debt floor filter ($10k min)</strong> and quality clears 10.3%, well above the 9.6% target.
+    </div>
+  </div>
+
+  <footer>
+    <span>Source: DebtReductionInc lead dataset · <a href="https://docs.google.com/spreadsheets/d/1Fn9pnxt7JvXYLBT-f8puwNWntCxjfoJwbIBptH_U1Ak" target="_blank" rel="noopener">Google Sheet</a></span>
+    <span id="footer-ts"></span>
+  </footer>
+
+</div><!-- /dash -->
+</div><!-- /page -->
+
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const SHEET_ID  = '1Fn9pnxt7JvXYLBT-f8puwNWntCxjfoJwbIBptH_U1Ak';
+const GID       = '1511019979';
+const CSV_URL   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQlfweW82fr337D_7aOHyD7McVoG_9U1I0nb8V8zIKXUwGROaHXJXF_CruKQW0C-RTF0XyJewEpFk93/pub?output=csv';
+
+// ── Column indices (0-based) ──────────────────────────────────────────────────
+const C = {
+  date:0, firstName:1, email:2, leadId:3, status:4, widget:5,
+  zone:6, pubCampaign:7, addrScore:8, phoneScore:9, advCampaign:10,
+  state:11, debt:12, ip:13, partner:14, refDomain:15,
+  mktCampaign:16, adGroup:17, keyword:18, searchQuery:19
+};
+
+// ── Quality classification ────────────────────────────────────────────────────
+const GOOD = new Set(['Closed','EP Sent','EP Received','EP Confirmed']);
+const BAD  = new Set(['Unable to contact - Bad Contact Information',
+                      'Contacted - Invalid Profile',"Contacted - Doesn't Qualify"]);
+function qClass(s){ return !s?'unk': s==='Closed'?'closed': GOOD.has(s)?'good': BAD.has(s)?'bad':'unk'; }
+
+// ── Partner normalisation ─────────────────────────────────────────────────────
+const P_MAP = {google:'Google Search',Google:'Google Content',yahoo:'Yahoo Search',
+               AdKnowledge:'AdKnowledge',Call_Center:'Call Center','Advertise.com':'Advertise.com'};
+function normPartner(p){ return P_MAP[p]||p||'Unknown'; }
+
+// ── Debt order ────────────────────────────────────────────────────────────────
+const DEBT_ORD = ['7500-10000','10001-15000','15001-20000','20001-30000',
+                  '30001-50000','50001-70000','70001-90000','90000-100000','More_than_100000','7500-15000'];
+
+// ── Widget short label ────────────────────────────────────────────────────────
+function shortW(w){ return (w||'').replace('w-300250-DebtReduction1-','300×250·').replace('w-302252-DebtReduction1-','302×252·'); }
+
+// ── CSV parser ────────────────────────────────────────────────────────────────
+function parseCSV(text){
+  const rows=[]; let cur='', inQ=false;
+  const cells=[]; const push=()=>{ cells.push(cur); cur=''; };
+  const line=()=>{ push(); rows.push([...cells]); cells.length=0; };
+  for(let i=0;i<text.length;i++){
+    const ch=text[i];
+    if(ch==='"'){ inQ=!inQ; }
+    else if(ch===','&&!inQ){ push(); }
+    else if(ch==='\n'&&!inQ){ line(); }
+    else if(ch==='\r'){}
+    else{ cur+=ch; }
+  }
+  if(cur||cells.length) line();
+  return rows;
+}
+
+// ── Aggregate helper ──────────────────────────────────────────────────────────
+function agg(rows, keyFn){
+  const m={};
+  rows.forEach(r=>{
+    const k=keyFn(r); if(!k) return;
+    if(!m[k]) m[k]={total:0,closed:0,good:0};
+    m[k].total++;
+    const q=qClass(r[C.status]);
+    if(q==='closed'){m[k].closed++;m[k].good++;}
+    else if(q==='good') m[k].good++;
+  });
+  return Object.entries(m).map(([k,v])=>({
+    key:k, total:v.total, closed:v.closed, good:v.good,
+    closedRate:v.total>0?+(v.closed/v.total*100).toFixed(1):0,
+    goodRate:  v.total>0?+(v.good/v.total*100).toFixed(1):0
+  }));
+}
+
+// ── Global state ──────────────────────────────────────────────────────────────
+let ALL_ROWS=[], CHARTS={};
+
+// ── Compute derived data from current filter ──────────────────────────────────
+function compute(rows){
+  const total=rows.length;
+  const closed=rows.filter(r=>r[C.status]==='Closed').length;
+  const good=rows.filter(r=>GOOD.has(r[C.status])).length;
+
+  // Monthly
+  const mMap={};
+  rows.forEach(r=>{
+    const raw=r[C.date]; if(!raw) return;
+    const d=new Date(raw); if(isNaN(d)) return;
+    const k=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    if(!mMap[k]) mMap[k]={total:0,closed:0,good:0};
+    mMap[k].total++;
+    const q=qClass(r[C.status]);
+    if(q==='closed'){mMap[k].closed++;mMap[k].good++;}
+    else if(q==='good') mMap[k].good++;
+  });
+  const monthly=Object.entries(mMap).sort(([a],[b])=>a.localeCompare(b))
+    .map(([k,v])=>({month:k,total:v.total,closed:v.closed,
+      closedRate:+(v.closed/v.total*100).toFixed(1),
+      goodRate:+(v.good/v.total*100).toFixed(1)}));
+
+  // Status breakdown
+  const sCounts={};
+  rows.forEach(r=>{ const s=r[C.status]||'(unknown)'; sCounts[s]=(sCounts[s]||0)+1; });
+  const statusArr=Object.entries(sCounts).sort((a,b)=>b[1]-a[1]).map(([s,n])=>({status:s,n}));
+
+  // Segments
+  const partner=agg(rows,r=>normPartner(r[C.partner])).sort((a,b)=>b.closedRate-a.closedRate);
+  const widget=agg(rows,r=>r[C.widget]).map(d=>({...d,label:shortW(d.key)}))
+    .filter(d=>d.total>=25).sort((a,b)=>b.goodRate-a.goodRate);
+  const debt=agg(rows,r=>r[C.debt]).sort((a,b)=>{
+    const ai=DEBT_ORD.indexOf(a.key), bi=DEBT_ORD.indexOf(b.key);
+    return (ai===-1?99:ai)-(bi===-1?99:bi);
+  });
+  const phone=agg(rows,r=>r[C.phoneScore]?`Score ${Math.round(parseFloat(r[C.phoneScore]))}`:null)
+    .sort((a,b)=>a.key.localeCompare(b.key));
+  const state=agg(rows,r=>r[C.state]).filter(d=>d.total>=30).sort((a,b)=>b.goodRate-a.goodRate).slice(0,15);
+  const campaign=agg(rows,r=>r[C.advCampaign]||'Unknown').sort((a,b)=>b.goodRate-a.goodRate);
+
+  return {total,closed,good,closedRate:+(closed/total*100).toFixed(1),goodRate:+(good/total*100).toFixed(1),
+    monthly,statusArr,partner,widget,debt,phone,state,campaign};
+}
+
+// ── Populate filter dropdowns ─────────────────────────────────────────────────
+function populateFilters(rows){
+  const partners=[...new Set(rows.map(r=>normPartner(r[C.partner])))].sort();
+  const debts=[...new Set(rows.map(r=>r[C.debt]).filter(Boolean))];
+  debts.sort((a,b)=>{const ai=DEBT_ORD.indexOf(a),bi=DEBT_ORD.indexOf(b);return (ai===-1?99:ai)-(bi===-1?99:bi);});
+  const months=[...new Set(rows.map(r=>{
+    const d=new Date(r[C.date]); if(isNaN(d)) return '';
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  }).filter(Boolean))].sort();
+  const states=[...new Set(rows.map(r=>r[C.state]).filter(Boolean))].sort();
+
+  const fill=(id,vals)=>{
+    const sel=document.getElementById(id);
+    vals.forEach(v=>{ const o=document.createElement('option'); o.value=o.textContent=v; sel.appendChild(o); });
+  };
+  fill('f-partner',partners); fill('f-debt',debts); fill('f-month',months); fill('f-state',states);
+}
+
+// ── Get filtered rows ─────────────────────────────────────────────────────────
+function filteredRows(){
+  const fp=document.getElementById('f-partner').value;
+  const fd=document.getElementById('f-debt').value;
+  const fm=document.getElementById('f-month').value;
+  const fs=document.getElementById('f-state').value;
+  return ALL_ROWS.filter(r=>{
+    if(fp && normPartner(r[C.partner])!==fp) return false;
+    if(fd && r[C.debt]!==fd) return false;
+    if(fs && r[C.state]!==fs) return false;
+    if(fm){
+      const d=new Date(r[C.date]); if(isNaN(d)) return false;
+      const m=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+      if(m!==fm) return false;
+    }
+    return true;
+  });
+}
+
+// ── Render all ────────────────────────────────────────────────────────────────
+function renderAll(){
+  const rows=filteredRows();
+  if(!rows.length){ showErr('No rows match the current filters.'); return; }
+  clearErr();
+  const d=compute(rows);
+  updateKPIs(d);
+  updateTrend(d.monthly);
+  updateDonut(d.statusArr, d.total);
+  showSeg(window._curSeg||'partner', null, d);
+  renderScenarios();
+}
+
+// ── KPIs ──────────────────────────────────────────────────────────────────────
+function updateKPIs(d){
+  document.getElementById('k-total').textContent=d.total.toLocaleString();
+  document.getElementById('k-closed').textContent=d.closedRate.toFixed(1)+'%';
+  document.getElementById('k-cn').textContent=d.closed.toLocaleString()+' closed leads';
+  document.getElementById('k-good').textContent=d.goodRate.toFixed(1)+'%';
+}
+
+// ── Trend chart ───────────────────────────────────────────────────────────────
+function updateTrend(monthly){
+  const ctx=document.getElementById('trendChart');
+  if(CHARTS.trend) CHARTS.trend.destroy();
+  CHARTS.trend=new Chart(ctx,{
+    type:'line',
+    data:{
+      labels:monthly.map(m=>m.month),
+      datasets:[{label:'Closed %',data:monthly.map(m=>m.closedRate),
+        borderColor:'#2a78d6',backgroundColor:'rgba(42,120,214,.07)',
+        borderWidth:2,pointRadius:4,pointBackgroundColor:'#2a78d6',
+        tension:.3,fill:true}]
+    },
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.y.toFixed(1)+'%'}}},
+      scales:{
+        x:{ticks:{font:{size:10},color:'#898781'},grid:{display:false},
+          title:{display:true,text:'Month',font:{size:10},color:'#898781'}},
+        y:{ticks:{font:{size:10},color:'#898781',callback:v=>v+'%'},
+          grid:{color:'rgba(128,128,128,.1)'},suggestedMin:0,suggestedMax:14,
+          title:{display:true,text:'Closed rate',font:{size:10},color:'#898781'}}
+      }
+    }
+  });
+}
+
+// ── Donut chart ───────────────────────────────────────────────────────────────
+const DCOLORS=['#2a78d6','#1baf7a','#eda100','#e34948','#73726c','#4a3aa7','#e87ba4','#eb6834'];
+function updateDonut(statusArr, total){
+  const top=statusArr.slice(0,7);
+  const other=statusArr.slice(7).reduce((a,b)=>a+b.n,0);
+  if(other>0) top.push({status:'Other',n:other});
+  const ctx=document.getElementById('donutChart');
+  if(CHARTS.donut) CHARTS.donut.destroy();
+  CHARTS.donut=new Chart(ctx,{
+    type:'doughnut',
+    data:{labels:top.map(s=>s.status),
+      datasets:[{data:top.map(s=>s.n),backgroundColor:DCOLORS,borderWidth:2}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},tooltip:{callbacks:{
+        label:c=>c.label+': '+c.parsed.toLocaleString()+' ('+( c.parsed/total*100).toFixed(1)+'%)'
+      }}}
+    }
+  });
+  const lg=document.getElementById('donut-legend');
+  lg.innerHTML=top.map((s,i)=>{
+    const short=s.status.replace('Unable to contact - ','').replace('Contacted - ','');
+    return `<div class="dl-row"><span class="dl-sq" style="background:${DCOLORS[i%DCOLORS.length]}"></span>${short} (${s.n.toLocaleString()})</div>`;
+  }).join('');
+}
+
+// ── Segment bars ──────────────────────────────────────────────────────────────
+const SEG_CFG={
+  partner:{key:'key',metric:'closedRate',label:'Closed rate',maxP:20,wide:false,
+    color:d=>d.closedRate<5?'#e34948':d.closedRate>11?'#1baf7a':'#2a78d6',
+    insight:'Google Content (AdSense/display) converts at just 4.1% — half the 8.1% baseline. Reassigning that budget to AdKnowledge or Yahoo Search is the single highest-leverage traffic move.',warn:''},
+  widget:{key:'label',metric:'goodRate',label:'Good rate (broad)',maxP:28,wide:true,
+    color:d=>d.goodRate<8?'#e34948':d.label.startsWith('300×250')?'#1baf7a':'#73726c',
+    insight:'300×250-CreditSolutions leads at 23.7%. The same creative at 302×252 drops to 12.4%. Shifting impression share toward the 300×250 format is the clearest creative lever.',
+    warn:'300×250-Head3 at 6.7% is the worst-performing creative — below even the content network. Pause it.'},
+  debt:{key:'key',metric:'goodRate',label:'Good rate (broad)',maxP:24,wide:false,
+    color:d=>d.goodRate<8?'#e34948':d.goodRate>=14?'#1baf7a':'#2a78d6',
+    insight:'The $10k–$90k debt band converts at 16%+. Below $10k (not enough debt to qualify) and above $100k (already has solutions) both collapse to ~7%. A $10k floor on the form is a one-line fix.',warn:''},
+  phone:{key:'key',metric:'goodRate',label:'Good rate (broad)',maxP:22,wide:false,
+    color:d=>d.goodRate>=15?'#1baf7a':'#2a78d6',
+    insight:'Score 5 (perfect name/number match) outperforms at 16.2%. Data covers ~46% of leads — as coverage grows, a score ≥ 4 filter becomes a reliable quality lever.',warn:''},
+  state:{key:'key',metric:'goodRate',label:'Good rate (broad)',maxP:30,wide:false,
+    color:d=>d.goodRate>=16?'#1baf7a':'#2a78d6',
+    insight:'OK, MA, AL, and CA lead on quality. NY and IL underperform. Geography is a secondary lever — the partner and debt filters have cleaner economics.',warn:''},
+  campaign:{key:'key',metric:'goodRate',label:'Good rate (broad)',maxP:18,wide:false,
+    color:()=>'#2a78d6',
+    insight:'No meaningful difference between branded (CreditSolutions logo) and generic creative. Chi² p ≈ 1.0. Whether the advertiser\'s name appears on the ad does not move conversion.',warn:''}
+};
+
+function showSeg(id, btn, preData){
+  window._curSeg=id;
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
+  if(btn) btn.classList.add('on');
+  else { const b=document.querySelector(`.tab[onclick*="'${id}'"]`); if(b) b.classList.add('on'); }
+  const cfg=SEG_CFG[id];
+  const data=preData?preData[id]:compute(filteredRows())[id];
+  let html='';
+  data.forEach(row=>{
+    const val=row[cfg.metric]||0;
+    const w=Math.min(val/cfg.maxP*100,100).toFixed(1);
+    const col=cfg.color(row);
+    html+=`<div class="hbar-row">
+      <div class="hbl${cfg.wide?' w':''}">${row[cfg.key]||'—'}</div>
+      <div class="hbt"><div class="hbf" style="width:${w}%;background:${col}"><span class="hbp">${val.toFixed(1)}%</span></div></div>
+      <div class="hbn">n=${(row.total||0).toLocaleString()}</div>
+    </div>`;
+  });
+  html+=`<div class="insight">${cfg.insight}</div>`;
+  if(cfg.warn) html+=`<div class="warn">${cfg.warn}</div>`;
+  document.getElementById('seg-body').innerHTML=html;
+}
+
+// ── Scenario bars (static — based on full dataset) ────────────────────────────
+const SCENARIOS=[
+  {label:'Baseline (all leads)',n:3021,rate:8.1},
+  {label:'Drop Google Content Network',n:2382,rate:9.2},
+  {label:'Drop extreme debt (<$10k, >$100k)',n:2388,rate:9.0},
+  {label:'Both filters combined',n:1890,rate:10.3},
+  {label:'Both + top-5 widgets',n:500,rate:12.0}
+];
+const TARGET=9.6, MAX_S=14;
+
+function renderScenarios(){
+  let h='';
+  SCENARIOS.forEach(s=>{
+    const w=Math.min(s.rate/MAX_S*100,100).toFixed(1);
+    const tw=(TARGET/MAX_S*100).toFixed(1);
+    const col=s.label.includes('Baseline')?'#73726c':s.rate>=TARGET?'#1baf7a':'#2a78d6';
+    const tick=s.rate>=TARGET?`<span style="color:#1baf7a;font-size:15px;margin-left:5px">✓</span>`:`<span style="width:20px;display:inline-block"></span>`;
+    h+=`<div class="sc-row">
+      <div class="sc-lbl">${s.label}<span>n=${s.n.toLocaleString()} leads</span></div>
+      <div class="sc-track">
+        <div class="sc-fill" style="width:${w}%;background:${col}"><span class="sc-pct">${s.rate.toFixed(1)}%</span></div>
+        <div class="sc-mark" style="left:${tw}%"></div>
+      </div>${tick}
+    </div>`;
+  });
+  document.getElementById('scenario-body').innerHTML=h;
+}
+
+// ── Error helpers ─────────────────────────────────────────────────────────────
+function showErr(msg){ const b=document.getElementById('err-banner'); b.textContent=msg; b.style.display='block'; }
+function clearErr(){ document.getElementById('err-banner').style.display='none'; }
+
+// ── Boot: fetch CSV ───────────────────────────────────────────────────────────
+async function boot(){
+  try{
+    const res=await fetch(CSV_URL);
+    if(!res.ok) throw new Error(`HTTP ${res.status} — make sure the sheet is set to "Anyone with the link can view".`);
+    const text=await res.text();
+    const rows=parseCSV(text);
+    const header=rows[0];
+    ALL_ROWS=rows.slice(1).filter(r=>r.length>4);
+
+    // Date range for sub-heading
+    const dates=ALL_ROWS.map(r=>new Date(r[C.date])).filter(d=>!isNaN(d)).sort((a,b)=>a-b);
+    const fmt=d=>d.toLocaleDateString('en-US',{month:'short',year:'numeric'});
+    const range=dates.length?`${fmt(dates[0])} – ${fmt(dates[dates.length-1])}`:'';
+
+    document.getElementById('sub-head').textContent=
+      `One publisher · ${ALL_ROWS.length.toLocaleString()} leads · ${range}`;
+    document.getElementById('last-updated').textContent=
+      'Refreshed ' + new Date().toLocaleTimeString();
+    document.getElementById('footer-ts').textContent=
+      'Data fetched ' + new Date().toLocaleString();
+
+    populateFilters(ALL_ROWS);
+
+    // Filter listeners
+    ['f-partner','f-debt','f-month','f-state'].forEach(id=>{
+      document.getElementById(id).addEventListener('change',renderAll);
+    });
+    document.getElementById('reset-btn').addEventListener('click',()=>{
+      ['f-partner','f-debt','f-month','f-state'].forEach(id=>{ document.getElementById(id).value=''; });
+      renderAll();
+    });
+
+    document.getElementById('loader').style.display='none';
+    document.getElementById('dash').style.display='block';
+    renderAll();
+
+  } catch(e){
+    document.getElementById('loader').innerHTML=
+      `<div style="color:#e34948;text-align:center;max-width:480px;line-height:1.7">
+        <strong>Could not load data</strong><br>${e.message}<br><br>
+        <a href="https://docs.google.com/spreadsheets/d/1Fn9pnxt7JvXYLBT-f8puwNWntCxjfoJwbIBptH_U1Ak" target="_blank" rel="noopener" style="font-size:13px">Open the sheet</a>
+        and go to File → Share → Publish to the web → CSV, then reload this page.
+      </div>`;
+  }
+}
+
+boot();
+</script>
+</body>
+</html>
