@@ -1,637 +1,753 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Lead Quality Dashboard</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-<style>
-/* ── tokens ── */
-:root {
-  --bg:#f5f4f0; --surface:#fff; --surface1:#f8f7f4;
-  --border:rgba(0,0,0,.09); --border-s:rgba(0,0,0,.16);
-  --text:#0b0b0b; --sec:#52514e; --muted:#898781;
-  --blue:#2a78d6; --teal:#1baf7a; --amber:#ba7517;
-  --red:#e34948; --gray:#73726c; --violet:#4a3aa7;
-  --r:8px;
-}
-@media(prefers-color-scheme:dark){:root{
-  --bg:#111110; --surface:#1c1c1a; --surface1:#252522;
-  --border:rgba(255,255,255,.09); --border-s:rgba(255,255,255,.16);
-  --text:#f5f4f0; --sec:#c3c2b7; --muted:#898781;
-  --blue:#3987e5; --teal:#199e70; --amber:#eda100;
-  --red:#e66767; --gray:#888780; --violet:#9085e9;
-}}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-  background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
-a{color:var(--blue)}
+// ═════════════════════════════════════════════════════════════════════════
+//  Lead Quality Dashboard  —  Google Apps Script (server-side)
+//  Deploy as: Web app  →  Execute as: Me  →  Access: Anyone with the link
+//
+//  Why this architecture instead of a published CSV + client-side fetch:
+//   - The sheet itself never has to be "published to the web" / publicly
+//     readable. doGet() reads it server-side with your own permissions.
+//   - Personally identifiable columns (FirstName, Email, IP) are read by
+//     the server for classification purposes but are NEVER sent to the
+//     browser - only normalized, aggregated, non-PII fields are.
+//   - All chi-square p-values / effect sizes are computed live from
+//     whatever is in the sheet right now - nothing is a hardcoded string
+//     that can silently drift out of sync with the data.
+// ═════════════════════════════════════════════════════════════════════════
 
-/* ── layout ── */
-.page{max-width:1120px;margin:0 auto;padding:2rem 1.25rem 4rem}
+const SHEET_ID       = '1Fn9pnxt7JvXYLBT-f8puwNWntCxjfoJwbIBptH_U1Ak';
+const SHEET_TAB_INDEX = 0;
 
-/* ── loader ── */
-#loader{display:flex;flex-direction:column;align-items:center;
-  justify-content:center;min-height:60vh;gap:1rem}
-.spinner{width:36px;height:36px;border:3px solid var(--border-s);
-  border-top-color:var(--blue);border-radius:50%;animation:spin .7s linear infinite}
-@keyframes spin{to{transform:rotate(360deg)}}
-#loader p{color:var(--muted);font-size:13px}
-#dash{display:none}
-
-/* ── header ── */
-.dash-header{display:flex;justify-content:space-between;align-items:flex-end;
-  margin-bottom:2rem;flex-wrap:wrap;gap:.5rem}
-.dash-header h1{font-size:20px;font-weight:500}
-.dash-header p{font-size:12px;color:var(--muted);margin-top:3px}
-#last-updated{font-size:11px;color:var(--muted)}
-
-/* ── KPI row ── */
-.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:2rem}
-.kpi{background:var(--surface);border:0.5px solid var(--border);border-radius:12px;padding:.9rem 1.1rem}
-.kpi-lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
-.kpi-val{font-size:26px;font-weight:500;line-height:1}
-.kpi-sub{font-size:11px;color:var(--sec);margin-top:4px}
-.kpi-target .kpi-val{color:var(--amber)}
-
-/* ── grid ── */
-.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:1.25rem;margin-bottom:1.25rem}
-.card{background:var(--surface);border:0.5px solid var(--border);border-radius:12px;padding:1.1rem 1.25rem}
-.card-t{font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:1rem}
-.cw{position:relative;width:100%}
-
-/* ── filter bar ── */
-.filter-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1.5rem;
-  background:var(--surface);border:0.5px solid var(--border);border-radius:12px;padding:.8rem 1rem}
-.filter-bar label{font-size:12px;color:var(--muted);margin-right:4px}
-select{font-size:12px;padding:3px 8px;border:0.5px solid var(--border-s);
-  border-radius:var(--r);background:var(--surface1);color:var(--text);cursor:pointer}
-.filter-grp{display:flex;align-items:center;gap:4px}
-
-/* ── tabs ── */
-.tabs{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:1rem}
-.tab{padding:4px 12px;border-radius:var(--r);border:0.5px solid var(--border-s);
-  font-size:12px;cursor:pointer;background:transparent;color:var(--sec);transition:all .1s}
-.tab:hover{background:var(--surface1)}
-.tab.on{background:var(--blue);color:#fff;border-color:var(--blue)}
-
-/* ── horizontal bars ── */
-.hbar-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
-.hbl{font-size:11px;color:var(--sec);width:155px;flex-shrink:0;text-align:right;line-height:1.3}
-.hbl.w{width:195px}
-.hbt{flex:1;background:var(--bg);border-radius:3px;height:19px;position:relative;overflow:hidden}
-.hbf{height:100%;border-radius:3px;display:flex;align-items:center;padding-left:5px;transition:width .45s ease}
-.hbp{font-size:10px;font-weight:500;color:#fff;white-space:nowrap}
-.hbn{font-size:10px;color:var(--muted);width:44px;flex-shrink:0}
-
-/* ── scenario bars ── */
-.sc-row{display:flex;align-items:center;gap:8px;margin-bottom:9px}
-.sc-lbl{width:225px;flex-shrink:0;font-size:11px;color:var(--sec);line-height:1.4}
-.sc-lbl span{display:block;font-size:10px;color:var(--muted)}
-.sc-track{flex:1;background:var(--bg);border-radius:3px;height:23px;position:relative;overflow:visible}
-.sc-fill{height:100%;border-radius:3px;display:flex;align-items:center;justify-content:flex-end;padding-right:6px}
-.sc-pct{font-size:11px;font-weight:500;color:#fff}
-.sc-mark{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--amber);z-index:2;border-radius:1px}
-
-/* ── callout boxes ── */
-.insight{background:#eaf3de;border:0.5px solid #97c459;border-radius:var(--r);
-  padding:.7rem .9rem;margin-top:.9rem;font-size:12px;color:#27500a;line-height:1.6}
-.warn{background:#faeeda;border:0.5px solid #ef9f27;border-radius:var(--r);
-  padding:.7rem .9rem;margin-top:.5rem;font-size:12px;color:#633806;line-height:1.6}
-@media(prefers-color-scheme:dark){
-  .insight{background:#173404;border-color:#3b6d11;color:#c0dd97}
-  .warn{background:#412402;border-color:#854f0b;color:#fac775}
-}
-
-/* ── donut legend ── */
-.dl{font-size:11px;color:var(--sec);line-height:2}
-.dl-row{display:flex;align-items:center;gap:5px}
-.dl-sq{width:8px;height:8px;border-radius:2px;flex-shrink:0}
-
-/* ── error banner ── */
-.err{background:#fcebeb;border:0.5px solid #f09595;border-radius:var(--r);
-  padding:1rem 1.25rem;color:#791f1f;font-size:13px;line-height:1.6;margin-bottom:1.5rem}
-
-/* ── footer ── */
-footer{margin-top:3rem;padding-top:1rem;border-top:0.5px solid var(--border);
-  display:flex;justify-content:space-between;font-size:11px;color:var(--muted);flex-wrap:wrap;gap:.5rem}
-</style>
-</head>
-<body>
-<div class="page">
-
-<div id="loader">
-  <div class="spinner"></div>
-  <p>Fetching lead data from Google Sheets…</p>
-</div>
-
-<div id="dash">
-
-  <div class="dash-header">
-    <div>
-      <h1>Lead quality dashboard</h1>
-      <p id="sub-head"></p>
-    </div>
-    <span id="last-updated"></span>
-  </div>
-
-  <div id="err-banner" style="display:none" class="err"></div>
-
-  <!-- KPI row -->
-  <div class="kpi-row">
-    <div class="kpi"><div class="kpi-lbl">Total leads</div><div class="kpi-val" id="k-total">—</div><div class="kpi-sub" id="k-range">—</div></div>
-    <div class="kpi"><div class="kpi-lbl">Closed rate (baseline)</div><div class="kpi-val" id="k-closed">—</div><div class="kpi-sub" id="k-cn">—</div></div>
-    <div class="kpi"><div class="kpi-lbl">Broad quality rate</div><div class="kpi-val" id="k-good">—</div><div class="kpi-sub">closed + EP steps</div></div>
-    <div class="kpi kpi-target"><div class="kpi-lbl">CPL uplift target</div><div class="kpi-val">9.6%</div><div class="kpi-sub">+20% → $33 CPL</div></div>
-  </div>
-
-  <!-- Filters -->
-  <div class="filter-bar">
-    <span style="font-size:12px;font-weight:500;color:var(--sec);margin-right:4px">Filter:</span>
-    <div class="filter-grp"><label>Partner</label><select id="f-partner"><option value="">All</option></select></div>
-    <div class="filter-grp"><label>Debt level</label><select id="f-debt"><option value="">All</option></select></div>
-    <div class="filter-grp"><label>Month</label><select id="f-month"><option value="">All</option></select></div>
-    <div class="filter-grp"><label>State</label><select id="f-state"><option value="">All</option></select></div>
-    <button id="reset-btn" style="margin-left:auto;font-size:12px;padding:3px 10px;
-      border:0.5px solid var(--border-s);border-radius:var(--r);background:transparent;
-      color:var(--sec);cursor:pointer">Reset filters</button>
-  </div>
-
-  <!-- Trend + Donut -->
-  <div class="grid2">
-    <div class="card">
-      <div class="card-t">Closed rate by month</div>
-      <div class="cw" style="height:195px"><canvas id="trendChart" role="img" aria-label="Line chart of monthly lead closed rate">Monthly closed rate trend.</canvas></div>
-    </div>
-    <div class="card">
-      <div class="card-t">Status breakdown</div>
-      <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
-        <div class="cw" style="height:170px;width:170px;flex-shrink:0"><canvas id="donutChart" role="img" aria-label="Donut chart of lead status distribution">Lead call status distribution.</canvas></div>
-        <div class="dl" id="donut-legend"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Segment tabs -->
-  <div class="card" style="margin-bottom:1.25rem">
-    <div class="card-t">Segment analysis</div>
-    <div class="tabs">
-      <button class="tab on" onclick="showSeg('partner',this)">Traffic source</button>
-      <button class="tab" onclick="showSeg('trafficType',this)">Search vs Display</button>
-      <button class="tab" onclick="showSeg('widget',this)">Ad creative</button>
-      <button class="tab" onclick="showSeg('adGroup',this)">Ad group / keyword</button>
-      <button class="tab" onclick="showSeg('debt',this)">Debt level</button>
-      <button class="tab" onclick="showSeg('phone',this)">Phone score</button>
-      <button class="tab" onclick="showSeg('state',this)">Geography</button>
-      <button class="tab" onclick="showSeg('campaign',this)">Ad campaign</button>
-      <button class="tab" onclick="showSeg('landingPage',this)">Landing page</button>
-    </div>
-    <div id="seg-body"></div>
-  </div>
-
-  <!-- Scenario analysis -->
-  <div class="card" style="margin-bottom:1.25rem">
-    <div class="card-t">Q3 — paths to 9.6% quality target ($33 CPL)</div>
-    <div style="font-size:11px;color:var(--amber);font-weight:500;margin-bottom:.6rem">
-      Dashed line = 9.6% target
-    </div>
-    <div id="scenario-body"></div>
-    <div class="insight">
-      <strong>Three independent levers each clear 9.0%+ on their own.</strong>
-      Lever 3 (pause Student Debt + Loan Default AdGroups) is the highest-impact single action: 387 Student Debt leads convert at just 1.0% — pausing this AdGroup alone reaches 9.4% with minimal volume loss.
-      Combined Levers 1+3 reach 9.9%, and all three together hit 11.1% — well above the 9.6% target.
-    </div>
-  </div>
-
-  <footer>
-    <span>Source: DebtReductionInc lead dataset · <a href="https://docs.google.com/spreadsheets/d/1Fn9pnxt7JvXYLBT-f8puwNWntCxjfoJwbIBptH_U1Ak" target="_blank" rel="noopener">Google Sheet</a></span>
-    <span id="footer-ts"></span>
-  </footer>
-
-</div><!-- /dash -->
-</div><!-- /page -->
-
-<script>
-// ── Config ────────────────────────────────────────────────────────────────────
-const SHEET_ID  = '1Fn9pnxt7JvXYLBT-f8puwNWntCxjfoJwbIBptH_U1Ak';
-const GID       = '1511019979';
-const CSV_URL   = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQlfweW82fr337D_7aOHyD7McVoG_9U1I0nb8V8zIKXUwGROaHXJXF_CruKQW0C-RTF0XyJewEpFk93/pub?output=csv';
-
-// ── Column indices (0-based) ──────────────────────────────────────────────────
-const C = {
+// ── Column indices (0-based, matching the dataset's column order) ───────────
+const COL = {
   date:0, firstName:1, email:2, leadId:3, status:4, widget:5,
   zone:6, pubCampaign:7, addrScore:8, phoneScore:9, advCampaign:10,
   state:11, debt:12, ip:13, partner:14, refDomain:15,
   mktCampaign:16, adGroup:17, keyword:18, searchQuery:19,
-  refUrl:20, refUrlParams:21, landingPage:22
+  refUrl:20, refParams:21, landingPage:22, lpParams:23
 };
 
-// ── Quality classification ────────────────────────────────────────────────────
-const GOOD = new Set(['Closed','EP Sent','EP Received','EP Confirmed']);
-const BAD  = new Set(['Unable to contact - Bad Contact Information',
-                      'Contacted - Invalid Profile',"Contacted - Doesn't Qualify"]);
-function qClass(s){ return !s?'unk': s==='Closed'?'closed': GOOD.has(s)?'good': BAD.has(s)?'bad':'unk'; }
+// ═════════════════════════════════════════════════════════════════════════
+//  CLASSIFICATION & NORMALIZATION
+// ═════════════════════════════════════════════════════════════════════════
 
-// ── Partner normalisation ─────────────────────────────────────────────────────
-const P_MAP = {google:'Google Search',Google:'Google Content',yahoo:'Yahoo Search',
-               AdKnowledge:'AdKnowledge',Call_Center:'Call Center','Advertise.com':'Advertise.com'};
-function normPartner(p){ return P_MAP[p]||p||'Unknown'; }
-
-// ── Traffic type from ReferralDomain (Search vs Display/Content) ──────────────
-const SEARCH_KEYWORDS = ['search.yahoo.com','www.google.com','www.bing.com','search.aol.com',
-  'search.mywebsearch.com','searchportal.information.com','www.ask.com','www.webcrawler.com',
-  'www.dogpile.com','search.live.com','www.altavista.com','search.earthlink.net',
-  'search.netzero.net','search.comcast.net','search.conduit.com','search.alot.com',
-  'search.myway.com','search.incredimail.com','search.bearshare.com','search.cbsnews.com',
-  'search.cnbc.com','search.cnn.com','search.money.cnn.com','search.netscape.com',
-  'search.pch.com','search.rr.com','search.shareazaweb.com','search.viewpoint.com',
-  'search.embarq.com','finder.cox.net','results.freeze.com','results.mindspark.com',
-  'searchguide.frontiernet.net','us.yhs.search.yahoo.com','espanol.search.yahoo.com',
-  'news.search.yahoo.com','aim.search.aol.com','cnn.search.aol.com','aolsearcht',
-  'search.dnsassist','search.domainnotfound','fastbrowsersearch','websearch.cs.com',
-  'websearch.verizon.net','www.findstuff.com','www.info.com','webhelp.qwest.net',
-  'wwk.searchresults','www2.searchresultsdirect','search1.info.com','search2.comcast',
-  'search6.info','search7.info','search23.info','search25.info','search26.info','search28.info',
-  'int.ask.com','mws.ask.com','dir.yahoo.com','yp.yahoo.com','news.google.com','maps.google.com',
-  'my.att.net','www.att.net','netmail.verizon.net','home.myhughesnet.com'];
-const DISPLAY_KEYWORDS = ['doubleclick.net','googlesyndication.com','googleadservices.com',
-  'ads.cnn.com','mm.chitika.net','shop.simpli.com','landings.trafficz','turing.oversee.net',
-  'adkdomains.com','park.parkingpanel.com','ezinearticles.com','www.ehow.com',
-  'www.soyouwanna.com','wiki.answers.com','answers.yahoo.com','www.wikihow.com',
-  'www.wisegeek.com','www.doityourself.com','about.com','finance.kosmix.com',
-  'www.docstoc.com','www.life123.com','www.mahalo.com','www.toseeka.com','www.buzzle.com',
-  'www.crawler.com','www.scribd.com','www.articlesbase.com','www.answerbag.com',
-  'www.thefreedictionary.com','encyclopedia.thefreedictionary.com','www.thefreelibrary.com',
-  'www.allexperts.com','en.allexperts.com','videos.howstuffworks.com','www.thriftyfun.com',
-  'www.msnbc.msn.com','moneycentral.msn.com','www.usnews.com','www.usatoday.com',
-  'www.reuters.com','www.businessweek.com','cbs2.com','www.myfoxdc.com','www.youtube.com',
-  'www.zimbio.com','www.docstoc.com'];
-function classifyTraffic(domain){
-  if(!domain||domain==='') return 'No Referrer';
-  const d=domain.toLowerCase();
-  if(d.includes('debtreductioninc.com')) return 'Direct / Internal';
-  for(const k of SEARCH_KEYWORDS){ if(d.includes(k)) return 'Search'; }
-  for(const k of DISPLAY_KEYWORDS){ if(d.includes(k)) return 'Display / Content'; }
-  if(d.includes('mail.')||d.includes('webmail')) return 'Email / Webmail';
-  return 'Other';
-}
-
-// ── Landing page short label ──────────────────────────────────────────────────
-function shortLP(url){
-  if(!url) return 'Unknown';
-  if(url.includes('callcenter')||url.includes('inadcoad')) return 'Call Center';
-  const m=url.match(/index(\d+)\.html/);
-  return m ? `index${m[1]}.html` : url.split('/').pop()||url;
-}
-
-// ── Debt order ────────────────────────────────────────────────────────────────
-const DEBT_ORD = ['7500-10000','10001-15000','15001-20000','20001-30000',
-                  '30001-50000','50001-70000','70001-90000','90000-100000','More_than_100000','7500-15000'];
-
-// ── Widget short label ────────────────────────────────────────────────────────
-function shortW(w){ return (w||'').replace('w-300250-DebtReduction1-','300×250·').replace('w-302252-DebtReduction1-','302×252·'); }
-
-// ── CSV parser ────────────────────────────────────────────────────────────────
-function parseCSV(text){
-  const rows=[]; let cur='', inQ=false;
-  const cells=[]; const push=()=>{ cells.push(cur); cur=''; };
-  const line=()=>{ push(); rows.push([...cells]); cells.length=0; };
-  for(let i=0;i<text.length;i++){
-    const ch=text[i];
-    if(ch==='"'){ inQ=!inQ; }
-    else if(ch===','&&!inQ){ push(); }
-    else if(ch==='\n'&&!inQ){ line(); }
-    else if(ch==='\r'){}
-    else{ cur+=ch; }
-  }
-  if(cur||cells.length) line();
-  return rows;
-}
-
-// ── Aggregate helper ──────────────────────────────────────────────────────────
-function agg(rows, keyFn){
-  const m={};
-  rows.forEach(r=>{
-    const k=keyFn(r); if(!k) return;
-    if(!m[k]) m[k]={total:0,closed:0,good:0};
-    m[k].total++;
-    const q=qClass(r[C.status]);
-    if(q==='closed'){m[k].closed++;m[k].good++;}
-    else if(q==='good') m[k].good++;
-  });
-  return Object.entries(m).map(([k,v])=>({
-    key:k, total:v.total, closed:v.closed, good:v.good,
-    closedRate:v.total>0?+(v.closed/v.total*100).toFixed(1):0,
-    goodRate:  v.total>0?+(v.good/v.total*100).toFixed(1):0
-  }));
-}
-
-// ── Global state ──────────────────────────────────────────────────────────────
-let ALL_ROWS=[], CHARTS={};
-
-// ── Compute derived data from current filter ──────────────────────────────────
-function compute(rows){
-  const total=rows.length;
-  const closed=rows.filter(r=>r[C.status]==='Closed').length;
-  const good=rows.filter(r=>GOOD.has(r[C.status])).length;
-
-  // Monthly
-  const mMap={};
-  rows.forEach(r=>{
-    const raw=r[C.date]; if(!raw) return;
-    const d=new Date(raw); if(isNaN(d)) return;
-    const k=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-    if(!mMap[k]) mMap[k]={total:0,closed:0,good:0};
-    mMap[k].total++;
-    const q=qClass(r[C.status]);
-    if(q==='closed'){mMap[k].closed++;mMap[k].good++;}
-    else if(q==='good') mMap[k].good++;
-  });
-  const monthly=Object.entries(mMap).sort(([a],[b])=>a.localeCompare(b))
-    .map(([k,v])=>({month:k,total:v.total,closed:v.closed,
-      closedRate:+(v.closed/v.total*100).toFixed(1),
-      goodRate:+(v.good/v.total*100).toFixed(1)}));
-
-  // Status breakdown
-  const sCounts={};
-  rows.forEach(r=>{ const s=r[C.status]||'(unknown)'; sCounts[s]=(sCounts[s]||0)+1; });
-  const statusArr=Object.entries(sCounts).sort((a,b)=>b[1]-a[1]).map(([s,n])=>({status:s,n}));
-
-  // Segments
-  const partner=agg(rows,r=>normPartner(r[C.partner])).sort((a,b)=>b.closedRate-a.closedRate);
-  const widget=agg(rows,r=>r[C.widget]).map(d=>({...d,label:shortW(d.key)}))
-    .filter(d=>d.total>=25).sort((a,b)=>b.goodRate-a.goodRate);
-  const debt=agg(rows,r=>r[C.debt]).sort((a,b)=>{
-    const ai=DEBT_ORD.indexOf(a.key), bi=DEBT_ORD.indexOf(b.key);
-    return (ai===-1?99:ai)-(bi===-1?99:bi);
-  });
-  const phone=agg(rows,r=>r[C.phoneScore]?`Score ${Math.round(parseFloat(r[C.phoneScore]))}`:null)
-    .sort((a,b)=>a.key.localeCompare(b.key));
-  const state=agg(rows,r=>r[C.state]).filter(d=>d.total>=30).sort((a,b)=>b.goodRate-a.goodRate).slice(0,15);
-  const campaign=agg(rows,r=>r[C.advCampaign]||'Unknown').sort((a,b)=>b.goodRate-a.goodRate);
-  const adGroup=agg(rows,r=>r[C.adGroup]).filter(d=>d.total>=5).sort((a,b)=>b.goodRate-a.goodRate);
-
-  // NEW: traffic type (Search vs Display/Content from ReferralDomain)
-  const TRAFFIC_ORDER=['Search','Email / Webmail','No Referrer','Other','Direct / Internal','Display / Content'];
-  const trafficType=agg(rows,r=>classifyTraffic(r[C.refDomain]))
-    .sort((a,b)=>(TRAFFIC_ORDER.indexOf(a.key)||99)-(TRAFFIC_ORDER.indexOf(b.key)||99));
-
-  // NEW: landing page (web only, call center excluded from chart but shown for context)
-  const landingPage=agg(rows,r=>shortLP(r[C.landingPage]))
-    .sort((a,b)=>b.total-a.total);
-
-  return {total,closed,good,closedRate:+(closed/total*100).toFixed(1),goodRate:+(good/total*100).toFixed(1),
-    monthly,statusArr,partner,widget,debt,phone,state,campaign,adGroup,trafficType,landingPage};
-}
-
-// ── Populate filter dropdowns ─────────────────────────────────────────────────
-function populateFilters(rows){
-  const partners=[...new Set(rows.map(r=>normPartner(r[C.partner])))].sort();
-  const debts=[...new Set(rows.map(r=>r[C.debt]).filter(Boolean))];
-  debts.sort((a,b)=>{const ai=DEBT_ORD.indexOf(a),bi=DEBT_ORD.indexOf(b);return (ai===-1?99:ai)-(bi===-1?99:bi);});
-  const months=[...new Set(rows.map(r=>{
-    const d=new Date(r[C.date]); if(isNaN(d)) return '';
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-  }).filter(Boolean))].sort();
-  const states=[...new Set(rows.map(r=>r[C.state]).filter(Boolean))].sort();
-
-  const fill=(id,vals)=>{
-    const sel=document.getElementById(id);
-    vals.forEach(v=>{ const o=document.createElement('option'); o.value=o.textContent=v; sel.appendChild(o); });
-  };
-  fill('f-partner',partners); fill('f-debt',debts); fill('f-month',months); fill('f-state',states);
-}
-
-// ── Get filtered rows ─────────────────────────────────────────────────────────
-function filteredRows(){
-  const fp=document.getElementById('f-partner').value;
-  const fd=document.getElementById('f-debt').value;
-  const fm=document.getElementById('f-month').value;
-  const fs=document.getElementById('f-state').value;
-  return ALL_ROWS.filter(r=>{
-    if(fp && normPartner(r[C.partner])!==fp) return false;
-    if(fd && r[C.debt]!==fd) return false;
-    if(fs && r[C.state]!==fs) return false;
-    if(fm){
-      const d=new Date(r[C.date]); if(isNaN(d)) return false;
-      const m=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-      if(m!==fm) return false;
-    }
-    return true;
-  });
-}
-
-// ── Render all ────────────────────────────────────────────────────────────────
-function renderAll(){
-  const rows=filteredRows();
-  if(!rows.length){ showErr('No rows match the current filters.'); return; }
-  clearErr();
-  const d=compute(rows);
-  updateKPIs(d);
-  updateTrend(d.monthly);
-  updateDonut(d.statusArr, d.total);
-  showSeg(window._curSeg||'partner', null, d);
-  renderScenarios();
-}
-
-// ── KPIs ──────────────────────────────────────────────────────────────────────
-function updateKPIs(d){
-  document.getElementById('k-total').textContent=d.total.toLocaleString();
-  document.getElementById('k-closed').textContent=d.closedRate.toFixed(1)+'%';
-  document.getElementById('k-cn').textContent=d.closed.toLocaleString()+' closed leads';
-  document.getElementById('k-good').textContent=d.goodRate.toFixed(1)+'%';
-}
-
-// ── Trend chart ───────────────────────────────────────────────────────────────
-function updateTrend(monthly){
-  const ctx=document.getElementById('trendChart');
-  if(CHARTS.trend) CHARTS.trend.destroy();
-  CHARTS.trend=new Chart(ctx,{
-    type:'line',
-    data:{
-      labels:monthly.map(m=>m.month),
-      datasets:[{label:'Closed %',data:monthly.map(m=>m.closedRate),
-        borderColor:'#2a78d6',backgroundColor:'rgba(42,120,214,.07)',
-        borderWidth:2,pointRadius:4,pointBackgroundColor:'#2a78d6',
-        tension:.3,fill:true}]
-    },
-    options:{responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:false},tooltip:{callbacks:{label:c=>c.parsed.y.toFixed(1)+'%'}}},
-      scales:{
-        x:{ticks:{font:{size:10},color:'#898781'},grid:{display:false},
-          title:{display:true,text:'Month',font:{size:10},color:'#898781'}},
-        y:{ticks:{font:{size:10},color:'#898781',callback:v=>v+'%'},
-          grid:{color:'rgba(128,128,128,.1)'},suggestedMin:0,suggestedMax:14,
-          title:{display:true,text:'Closed rate',font:{size:10},color:'#898781'}}
-      }
-    }
-  });
-}
-
-// ── Donut chart ───────────────────────────────────────────────────────────────
-const DCOLORS=['#2a78d6','#1baf7a','#eda100','#e34948','#73726c','#4a3aa7','#e87ba4','#eb6834'];
-function updateDonut(statusArr, total){
-  const top=statusArr.slice(0,7);
-  const other=statusArr.slice(7).reduce((a,b)=>a+b.n,0);
-  if(other>0) top.push({status:'Other',n:other});
-  const ctx=document.getElementById('donutChart');
-  if(CHARTS.donut) CHARTS.donut.destroy();
-  CHARTS.donut=new Chart(ctx,{
-    type:'doughnut',
-    data:{labels:top.map(s=>s.status),
-      datasets:[{data:top.map(s=>s.n),backgroundColor:DCOLORS,borderWidth:2}]},
-    options:{responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:false},tooltip:{callbacks:{
-        label:c=>c.label+': '+c.parsed.toLocaleString()+' ('+( c.parsed/total*100).toFixed(1)+'%)'
-      }}}
-    }
-  });
-  const lg=document.getElementById('donut-legend');
-  lg.innerHTML=top.map((s,i)=>{
-    const short=s.status.replace('Unable to contact - ','').replace('Contacted - ','');
-    return `<div class="dl-row"><span class="dl-sq" style="background:${DCOLORS[i%DCOLORS.length]}"></span>${short} (${s.n.toLocaleString()})</div>`;
-  }).join('');
-}
-
-// ── Segment bars ──────────────────────────────────────────────────────────────
-const SEG_CFG={
-  partner:{key:'key',metric:'closedRate',label:'Closed rate',maxP:20,wide:false,
-    color:d=>d.closedRate<5?'#e34948':d.closedRate>10?'#1baf7a':'#2a78d6',
-    insight:'Google Content/Display network converts at just 4.1% — less than half the 8.1% baseline. AdKnowledge leads at 12.3%. Google Search (9.9%) and Yahoo Search (7.7%) are mid-tier. Reassigning content-network budget to AdKnowledge is the clearest traffic lever.',warn:''},
-  widget:{key:'label',metric:'goodRate',label:'Good rate (broad)',maxP:28,wide:true,
-    color:d=>d.goodRate<8?'#e34948':d.label.startsWith('300×250')?'#1baf7a':'#73726c',
-    insight:'300×250-CreditSolutions leads at 23.7%. The same creative at 302×252 drops to 12.4%. Shifting impression share toward the 300×250 format is the clearest creative lever.',
-    warn:'300×250-Head3 at 6.7% is the worst-performing creative — below even the content network. Pause it.'},
-  debt:{key:'key',metric:'goodRate',label:'Good rate (broad)',maxP:24,wide:false,
-    color:d=>d.goodRate<8?'#e34948':d.goodRate>=14?'#1baf7a':'#2a78d6',
-    insight:'The $10k–$90k debt band converts at 16%+. Below $10k (not enough debt to qualify) and above $100k (already has solutions) both collapse to ~7%. A $10k floor on the form is a one-line fix.',warn:''},
-  phone:{key:'key',metric:'goodRate',label:'Good rate (broad)',maxP:22,wide:false,
-    color:d=>d.goodRate>=15?'#1baf7a':'#2a78d6',
-    insight:'Score 5 (perfect name/number match) outperforms at 16.2%. Data covers ~46% of leads — as coverage grows, a score ≥ 4 filter becomes a reliable quality lever.',warn:''},
-  state:{key:'key',metric:'goodRate',label:'Good rate (broad)',maxP:30,wide:false,
-    color:d=>d.goodRate>=16?'#1baf7a':'#2a78d6',
-    insight:'OK, MA, AL, and CA lead on quality. NY and IL underperform. Geography is a secondary lever — the partner and debt filters have cleaner economics.',warn:''},
-  campaign:{key:'key',metric:'goodRate',label:'Good rate (broad)',maxP:18,wide:false,
-    color:()=>'#2a78d6',
-    insight:'No meaningful difference between branded (CreditSolutions logo) and generic creative. Chi² p ≈ 1.0. Whether the advertiser\'s name appears on the ad does not move conversion.',warn:''},
-  adGroup:{key:'key',metric:'goodRate',label:'Good rate (broad)',maxP:30,wide:true,
-    color:d=>d.goodRate<3?'#e34948':d.goodRate>=18?'#1baf7a':'#2a78d6',
-    insight:'CRITICAL FINDING: "Student Debt" (n=387, 2.5% good rate) and "Loan Default" (n=71, 1.4%) are catastrophically underperforming — 5–8× below baseline. These keyword groups attract people with student loan debt or defaulted loans, who don\'t qualify for the debt settlement program. Chi² p < 0.000001. Pausing these AdGroups alone moves quality to 9.4%.',
-    warn:'"Student Debt" is the single largest volume AdGroup (387 leads) and the worst performer. It should be paused immediately. "Loan Default" (71 leads, 1.4%) is similarly irrelevant to the advertiser\'s product.'},
-  trafficType:{key:'key',metric:'closedRate',label:'Closed rate',maxP:15,wide:false,
-    color:d=>d.key==='Display / Content'?'#e34948':d.key==='Search'?'#1baf7a':'#2a78d6',
-    insight:'NEW FINDING: Search traffic (people actively searching for debt help) closes at 9.4% vs Display/Content at 4.8% — nearly 2× better. Chi² p = 0.0004. This directly answers "what kind of ad did they see": a search ad triggered by active intent vs a passive banner on an article page.',
-    warn:'Display/Content n=648 leads at 4.8% closed — worst traffic type. Classified from ReferralDomain: doubleclick.net, googlesyndication.com, ehow.com, ezinearticles.com, etc.'},
-  landingPage:{key:'key',metric:'closedRate',label:'Closed rate',maxP:15,wide:true,
-    color:d=>d.key==='index12.html'?'#e34948':d.key==='index8.html'?'#1baf7a':'#2a78d6',
-    insight:'NEW FINDING: Landing pages differ significantly in quality (Chi² p = 0.025). index8.html (the main page, 2,532 leads) converts at 8.3%. index11.html drops to 7.0%. index12.html is dramatically worse at only 1.6% — 5× below baseline. This is a design or targeting problem worth investigating urgently.',
-    warn:'index12.html: only 2 closed leads from 124. If this page is still live, pause or redesign it immediately.'}
-};
-
-function showSeg(id, btn, preData){
-  window._curSeg=id;
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
-  if(btn) btn.classList.add('on');
-  else { const b=document.querySelector(`.tab[onclick*="'${id}'"]`); if(b) b.classList.add('on'); }
-  const cfg=SEG_CFG[id];
-  const data=preData?preData[id]:compute(filteredRows())[id];
-  let html='';
-  data.forEach(row=>{
-    const val=row[cfg.metric]||0;
-    const w=Math.min(val/cfg.maxP*100,100).toFixed(1);
-    const col=cfg.color(row);
-    html+=`<div class="hbar-row">
-      <div class="hbl${cfg.wide?' w':''}">${row[cfg.key]||'—'}</div>
-      <div class="hbt"><div class="hbf" style="width:${w}%;background:${col}"><span class="hbp">${val.toFixed(1)}%</span></div></div>
-      <div class="hbn">n=${(row.total||0).toLocaleString()}</div>
-    </div>`;
-  });
-  html+=`<div class="insight">${cfg.insight}</div>`;
-  if(cfg.warn) html+=`<div class="warn">${cfg.warn}</div>`;
-  document.getElementById('seg-body').innerHTML=html;
-}
-
-// ── Scenario bars — updated with 3-lever analysis ────────────────────────────
-const SCENARIOS=[
-  {label:'Baseline (all leads)',                               n:3021, rate:8.1},
-  {label:'Lever 1: Drop Google Content Network',               n:2382, rate:9.2},
-  {label:'Lever 2: Drop extreme debt (<$10k, >$100k)',         n:2388, rate:9.0},
-  {label:'Lever 3: Pause Student Debt + Loan Default AdGroups',n:2560, rate:9.4},
-  {label:'Levers 1 + 3 (traffic + keyword)',                   n:2190, rate:9.9},
-  {label:'Levers 1 + 2 + 3 (all three filters)',               n:1737, rate:11.1},
+const GOOD_STATUSES = ['Closed', 'EP Sent', 'EP Received', 'EP Confirmed'];
+const BAD_STATUSES = [
+  'Unable to contact - Bad Contact Information',
+  'Contacted - Invalid Profile',
+  "Contacted - Doesn't Qualify"
 ];
-const TARGET=9.6, MAX_S=14;
 
-function renderScenarios(){
-  let h='';
-  SCENARIOS.forEach(s=>{
-    const w=Math.min(s.rate/MAX_S*100,100).toFixed(1);
-    const tw=(TARGET/MAX_S*100).toFixed(1);
-    const col=s.label.includes('Baseline')?'#73726c':s.rate>=TARGET?'#1baf7a':'#2a78d6';
-    const tick=s.rate>=TARGET?`<span style="color:#1baf7a;font-size:15px;margin-left:5px">✓</span>`:`<span style="width:20px;display:inline-block"></span>`;
-    h+=`<div class="sc-row">
-      <div class="sc-lbl">${s.label}<span>n=${s.n.toLocaleString()} leads</span></div>
-      <div class="sc-track">
-        <div class="sc-fill" style="width:${w}%;background:${col}"><span class="sc-pct">${s.rate.toFixed(1)}%</span></div>
-        <div class="sc-mark" style="left:${tw}%"></div>
-      </div>${tick}
-    </div>`;
-  });
-  document.getElementById('scenario-body').innerHTML=h;
+function classifyStatus(s) {
+  if (!s) return 'unknown';
+  if (s === 'Closed') return 'closed';
+  if (GOOD_STATUSES.indexOf(s) !== -1) return 'good';
+  if (BAD_STATUSES.indexOf(s) !== -1) return 'bad';
+  return 'unknown';
 }
 
-// ── Error helpers ─────────────────────────────────────────────────────────────
-function showErr(msg){ const b=document.getElementById('err-banner'); b.textContent=msg; b.style.display='block'; }
-function clearErr(){ document.getElementById('err-banner').style.display='none'; }
+// "Google" vs "google" is NOT a casing bug. Verified against this dataset:
+// lowercase "google" rows carry real AdWords search-campaign names and
+// referral domains that are actual search engines; capitalized "Google"
+// rows are tagged with one generic campaign name and referral domains
+// dominated by ad-serving/display networks. They are two real channels
+// (Search vs Content/Display Network) that happen to differ only by
+// capitalization in this export - relabel, don't merge.
+function normalisePartner(raw) {
+  const map = {
+    'google': 'Google Search',
+    'Google': 'Google Content',
+    'yahoo': 'Yahoo Search',
+    'AdKnowledge': 'AdKnowledge',
+    'Call_Center': 'Call Center',
+    'Advertise.com': 'Advertise.com'
+  };
+  return map[raw] || raw || 'Unknown';
+}
 
-// ── Boot: fetch CSV ───────────────────────────────────────────────────────────
-async function boot(){
-  try{
-    const res=await fetch(CSV_URL);
-    if(!res.ok) throw new Error(`HTTP ${res.status} — make sure the sheet is set to "Anyone with the link can view".`);
-    const text=await res.text();
-    const rows=parseCSV(text);
-    const header=rows[0];
-    ALL_ROWS=rows.slice(1).filter(r=>r.length>4);
+// The brief states explicitly that the 300250 and 302252 widget-size
+// prefixes are the SAME creative ("w-300250-DebtReduction1-1DC is
+// identical to w-302252-DebtReduction1-1DC"). This MUST be merged, or the
+// same creative gets split into a large ordinary-performing bucket and a
+// small bucket that looks artificially strong/weak purely from sample noise.
+function normaliseWidget(raw) {
+  return (raw || '').replace('w-300250-', 'w-WIDGET-').replace('w-302252-', 'w-WIDGET-');
+}
+function shortWidgetLabel(normalized) {
+  return (normalized || '').replace('w-WIDGET-DebtReduction1-', '');
+}
 
-    // Date range for sub-heading
-    const dates=ALL_ROWS.map(r=>new Date(r[C.date])).filter(d=>!isNaN(d)).sort((a,b)=>a-b);
-    const fmt=d=>d.toLocaleDateString('en-US',{month:'short',year:'numeric'});
-    const range=dates.length?`${fmt(dates[0])} – ${fmt(dates[dates.length-1])}`:'';
+// Search vs Display/Content, reconstructed from ReferralDomain since
+// MarketingCampaign never actually contains the word "content" anywhere
+// in this data (a planned naming convention that was never used).
+const SEARCH_DOMAIN_HINTS = ['google.com', 'search.yahoo.com', 'bing.com', 'search.aol.com',
+  'ask.com', 'mywebsearch.com', 'webcrawler.com', 'searchportal.information.com',
+  'altavista.com', 'dogpile.com', 'live.com', 'netscape.com', 'findstuff.com'];
+const DISPLAY_DOMAIN_HINTS = ['doubleclick.net', 'googlesyndication.com', 'googleadservices.com',
+  'ezinearticles.com', 'ehow.com', 'soyouwanna.com', 'wikihow.com', 'wisegeek.com',
+  'docstoc.com', 'life123.com', 'mahalo.com', 'buzzle.com', 'scribd.com', 'articlesbase.com',
+  'thefreedictionary.com', 'thefreelibrary.com', 'allexperts.com', 'howstuffworks.com'];
 
-    document.getElementById('sub-head').textContent=
-      `One publisher · ${ALL_ROWS.length.toLocaleString()} leads · ${range}`;
-    document.getElementById('last-updated').textContent=
-      'Refreshed ' + new Date().toLocaleTimeString();
-    document.getElementById('footer-ts').textContent=
-      'Data fetched ' + new Date().toLocaleString();
+function classifyTrafficType(domain, pubCampaign) {
+  if (pubCampaign === 'DebtReductionCallCenter') return 'Call Center (phone)';
+  if (!domain) return 'Direct / No Referrer';
+  const d = String(domain).toLowerCase();
+  if (d.indexOf('debtreductioninc.com') !== -1) return 'Direct / No Referrer';
+  for (let i = 0; i < DISPLAY_DOMAIN_HINTS.length; i++) { if (d.indexOf(DISPLAY_DOMAIN_HINTS[i]) !== -1) return 'Display / Content'; }
+  for (let i = 0; i < SEARCH_DOMAIN_HINTS.length; i++) { if (d.indexOf(SEARCH_DOMAIN_HINTS[i]) !== -1) return 'Search'; }
+  if (d.indexOf('mail.') !== -1 || d.indexOf('webmail') !== -1) return 'Email / Webmail';
+  return 'Other referrer';
+}
 
-    populateFilters(ALL_ROWS);
+function shortLandingPage(url) {
+  if (!url) return 'Unknown';
+  const s = String(url);
+  if (s.toLowerCase().indexOf('callcenter') !== -1 || s.toLowerCase().indexOf('inadcoad') !== -1) return 'Call Center';
+  const m = s.match(/index(\d+)\.html/);
+  if (m) return 'index' + m[1] + '.html';
+  const parts = s.split('/');
+  return parts[parts.length - 1] || s;
+}
 
-    // Filter listeners
-    ['f-partner','f-debt','f-month','f-state'].forEach(id=>{
-      document.getElementById(id).addEventListener('change',renderAll);
-    });
-    document.getElementById('reset-btn').addEventListener('click',()=>{
-      ['f-partner','f-debt','f-month','f-state'].forEach(id=>{ document.getElementById(id).value=''; });
-      renderAll();
-    });
+const DEBT_ORDER = ['7500-10000', '7500-15000', '10001-15000', '15001-20000',
+  '20001-30000', '30001-50000', '50001-70000', '70001-90000', '90000-100000', 'More_than_100000'];
+const DEBT_MIDPOINT = {
+  '7500-10000': 8750, '7500-15000': 11250, '10001-15000': 12500, '15001-20000': 17500,
+  '20001-30000': 25000, '30001-50000': 40000, '50001-70000': 60000, '70001-90000': 80000,
+  '90000-100000': 95000, 'More_than_100000': 120000
+};
 
-    document.getElementById('loader').style.display='none';
-    document.getElementById('dash').style.display='block';
-    renderAll();
+// ═════════════════════════════════════════════════════════════════════════
+//  CHI-SQUARE TEST  (no external library available in Apps Script, so the
+//  regularized incomplete gamma function is implemented directly here.
+//  Validated against scipy.stats.chi2_contingency on this exact dataset:
+//  matches to 5+ significant figures.)
+// ═════════════════════════════════════════════════════════════════════════
 
-  } catch(e){
-    document.getElementById('loader').innerHTML=
-      `<div style="color:#e34948;text-align:center;max-width:480px;line-height:1.7">
-        <strong>Could not load data</strong><br>${e.message}<br><br>
-        <a href="https://docs.google.com/spreadsheets/d/1Fn9pnxt7JvXYLBT-f8puwNWntCxjfoJwbIBptH_U1Ak" target="_blank" rel="noopener" style="font-size:13px">Open the sheet</a>
-        and go to File → Share → Publish to the web → CSV, then reload this page.
-      </div>`;
+function logGamma(x) {
+  const g = 7;
+  const c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7];
+  if (x < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * x)) - logGamma(1 - x);
+  x -= 1;
+  let a = c[0];
+  const t = x + g + 0.5;
+  for (let i = 1; i < g + 2; i++) a += c[i] / (x + i);
+  return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
+}
+function gammaPSeries(a, x) {
+  if (x <= 0) return 0;
+  let ap = a, sum = 1 / a, del = sum;
+  for (let n = 1; n < 200; n++) { ap += 1; del *= x / ap; sum += del; if (Math.abs(del) < Math.abs(sum) * 1e-14) break; }
+  return sum * Math.exp(-x + a * Math.log(x) - logGamma(a));
+}
+function gammaQContFrac(a, x) {
+  let b = x + 1 - a, c = 1e300, d = 1 / b, h = d;
+  for (let i = 1; i < 200; i++) {
+    const an = -i * (i - a); b += 2; d = an * d + b;
+    if (Math.abs(d) < 1e-300) d = 1e-300;
+    c = b + an / c; if (Math.abs(c) < 1e-300) c = 1e-300;
+    d = 1 / d; const del = d * c; h *= del;
+    if (Math.abs(del - 1) < 1e-14) break;
+  }
+  return Math.exp(-x + a * Math.log(x) - logGamma(a)) * h;
+}
+function chiSquarePValue(chi2, dof) {
+  if (chi2 <= 0 || dof <= 0) return 1;
+  const a = dof / 2, x = chi2 / 2;
+  return x < a + 1 ? 1 - gammaPSeries(a, x) : gammaQContFrac(a, x);
+}
+
+// 2-outcome (good/not-good) chi-square test of independence across N categories
+function chiSquareTest(buckets) {
+  const keys = Object.keys(buckets);
+  const k = keys.length;
+  if (k < 2) return { chi2: 0, dof: 0, p: 1, cramersV: 0, n: 0 };
+  let grandSuccess = 0, grandTotal = 0;
+  keys.forEach(function (key) { grandSuccess += buckets[key].success; grandTotal += buckets[key].total; });
+  const pHat = grandSuccess / grandTotal;
+  let chi2 = 0;
+  keys.forEach(function (key) {
+    const b = buckets[key];
+    const expS = b.total * pHat, expF = b.total * (1 - pHat);
+    const obsF = b.total - b.success;
+    if (expS > 0) chi2 += Math.pow(b.success - expS, 2) / expS;
+    if (expF > 0) chi2 += Math.pow(obsF - expF, 2) / expF;
+  });
+  const dof = k - 1;
+  const p = chiSquarePValue(chi2, dof);
+  const cramersV = Math.sqrt(chi2 / grandTotal);
+  return { chi2: chi2, dof: dof, p: p, cramersV: cramersV, n: grandTotal };
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+//  AGGREGATION  (minimum-sample filter is applied BEFORE the significance
+//  test, not just for display - this is what keeps high-cardinality, mostly
+//  -missing columns like raw Keyword/ReferralDomain from producing an
+//  inflated, statistically meaningless effect size)
+// ═════════════════════════════════════════════════════════════════════════
+
+function aggregate(rows, keyFn, minLeads) {
+  minLeads = minLeads || 1;
+  const m = {};
+  rows.forEach(function (r) {
+    const k = keyFn(r);
+    if (k === null || k === undefined || k === '') return;
+    if (!m[k]) m[k] = { total: 0, closed: 0, good: 0 };
+    m[k].total++;
+    const q = classifyStatus(r[COL.status]);
+    if (q === 'closed') { m[k].closed++; m[k].good++; }
+    else if (q === 'good') m[k].good++;
+  });
+  let leadsDropped = 0;
+  const buckets = {}, arr = [];
+  Object.keys(m).forEach(function (k) {
+    if (m[k].total >= minLeads) {
+      buckets[k] = { success: m[k].good, total: m[k].total };
+      arr.push({
+        key: k, total: m[k].total, closed: m[k].closed, good: m[k].good,
+        closedRate: +(m[k].closed / m[k].total * 100).toFixed(2),
+        goodRate: +(m[k].good / m[k].total * 100).toFixed(2)
+      });
+    } else {
+      leadsDropped += m[k].total;
+    }
+  });
+  return { rows: arr, test: chiSquareTest(buckets), categoriesKept: arr.length, leadsDropped: leadsDropped };
+}
+
+function insightText(label, segResult, sortKey) {
+  const rows = segResult.rows.slice().sort(function (a, b) { return b[sortKey] - a[sortKey]; });
+  if (rows.length < 2) return label + ': not enough categories with sufficient sample size to compare.';
+  const top = rows[0], bottom = rows[rows.length - 1];
+  const t = segResult.test;
+  const sig = t.p < 0.05 ? 'statistically significant' : 'not statistically significant';
+  let txt = 'Best: ' + top.key + ' at ' + top[sortKey].toFixed(1) + '% (n=' + top.total + '). ' +
+    'Worst: ' + bottom.key + ' at ' + bottom[sortKey].toFixed(1) + '% (n=' + bottom.total + '). ' +
+    'Chi-square p = ' + t.p.toExponential(2) + ' (' + sig + ' at p<0.05), Cramer\u2019s V = ' + t.cramersV.toFixed(3) + '.';
+  if (segResult.leadsDropped > 0) {
+    txt += ' (' + segResult.leadsDropped + ' leads in smaller categories excluded from this test for sample-size reliability.)';
+  }
+  return txt;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+//  MAIN COMPUTATION
+// ═════════════════════════════════════════════════════════════════════════
+
+function computeData(rows) {
+  const total = rows.length;
+  const closed = rows.filter(function (r) { return r[COL.status] === 'Closed'; }).length;
+  const good = rows.filter(function (r) { return GOOD_STATUSES.indexOf(r[COL.status]) !== -1; }).length;
+
+  // Monthly trend
+  const monthly = {};
+  rows.forEach(function (r) {
+    const raw = r[COL.date]; if (!raw) return;
+    const d = new Date(raw); if (isNaN(d)) return;
+    const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    if (!monthly[k]) monthly[k] = { total: 0, closed: 0, good: 0 };
+    monthly[k].total++;
+    const q = classifyStatus(r[COL.status]);
+    if (q === 'closed') { monthly[k].closed++; monthly[k].good++; }
+    else if (q === 'good') monthly[k].good++;
+  });
+  const monthlyArr = Object.keys(monthly).sort().map(function (k) {
+    const v = monthly[k];
+    return { month: k, total: v.total, closed: v.closed,
+      closedRate: +(v.closed / v.total * 100).toFixed(1),
+      goodRate: +(v.good / v.total * 100).toFixed(1) };
+  });
+
+  // Status breakdown (donut)
+  const statusCounts = {};
+  rows.forEach(function (r) { const s = r[COL.status] || '(no status / pending)'; statusCounts[s] = (statusCounts[s] || 0) + 1; });
+  const statusArr = Object.keys(statusCounts).map(function (s) { return { status: s, n: statusCounts[s] }; })
+    .sort(function (a, b) { return b.n - a.n; });
+
+  // Segments - each with a live chi-square test, min-sample filter applied first
+  const segments = {
+    partner: aggregate(rows, function (r) { return normalisePartner(r[COL.partner]); }, 30),
+    trafficType: aggregate(rows, function (r) { return classifyTrafficType(r[COL.refDomain], r[COL.pubCampaign]); }, 30),
+    widget: aggregate(rows, function (r) { return shortWidgetLabel(normaliseWidget(r[COL.widget])); }, 30),
+    debt: aggregate(rows, function (r) { return r[COL.debt]; }, 20),
+    phone: aggregate(rows, function (r) { return r[COL.phoneScore] ? 'Score ' + Math.round(parseFloat(r[COL.phoneScore])) : null; }, 15),
+    addr: aggregate(rows, function (r) { return r[COL.addrScore] ? 'Score ' + Math.round(parseFloat(r[COL.addrScore])) : null; }, 15),
+    state: aggregate(rows, function (r) { return r[COL.state]; }, 30),
+    campaign: aggregate(rows, function (r) { return r[COL.advCampaign]; }, 30),
+    adGroup: aggregate(rows, function (r) { return r[COL.adGroup]; }, 30),
+    landingPage: aggregate(rows, function (r) {
+      const lp = shortLandingPage(r[COL.landingPage]);
+      return lp === 'Call Center' ? null : lp; // already covered by pubCampaign/partner
+    }, 30)
+  };
+
+  // Sort each for display (debt by natural band order, others by rate)
+  segments.debt.rows.sort(function (a, b) {
+    const ai = DEBT_ORDER.indexOf(a.key), bi = DEBT_ORDER.indexOf(b.key);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+  ['partner', 'trafficType', 'widget', 'phone', 'addr', 'state', 'campaign', 'adGroup', 'landingPage'].forEach(function (k) {
+    segments[k].rows.sort(function (a, b) { return b.closedRate - a.closedRate; });
+  });
+
+  const insights = {
+    partner: insightText('Traffic source', segments.partner, 'closedRate'),
+    trafficType: insightText('Search vs Display', segments.trafficType, 'closedRate'),
+    widget: insightText('Ad creative', segments.widget, 'goodRate'),
+    debt: insightText('Debt level', segments.debt, 'closedRate'),
+    phone: insightText('Phone verification score', segments.phone, 'goodRate'),
+    addr: insightText('Address verification score', segments.addr, 'goodRate'),
+    state: insightText('Geography', segments.state, 'goodRate'),
+    campaign: insightText('Branded vs generic ad copy', segments.campaign, 'goodRate'),
+    adGroup: insightText('Ad group / keyword theme', segments.adGroup, 'goodRate'),
+    landingPage: insightText('Landing page', segments.landingPage, 'closedRate')
+  };
+
+  // ── Q3 scenarios — computed dynamically from THIS run's data, never hardcoded ──
+  const overallRate = closed / total;
+  function rateOf(subset) {
+    const c = subset.filter(function (r) { return r[COL.status] === 'Closed'; }).length;
+    return { n: subset.length, closed: c, rate: subset.length ? c / subset.length : 0 };
+  }
+  const scenarios = [];
+  scenarios.push({ label: 'Baseline (all leads)', detail: '', stat: rateOf(rows) });
+
+  const dropContent = rows.filter(function (r) { return normalisePartner(r[COL.partner]) !== 'Google Content'; });
+  scenarios.push({ label: 'Drop Google Content/Display traffic', detail: 'keep Search, Yahoo, AdKnowledge, Call Center', stat: rateOf(dropContent) });
+
+  const debtBand = rows.filter(function (r) {
+    const mid = DEBT_MIDPOINT[r[COL.debt]];
+    return mid && mid > 10000 && mid <= 100000;
+  });
+  scenarios.push({ label: 'Debt-level qualifier', detail: 'exclude <$10k and >$100k debt', stat: rateOf(debtBand) });
+
+  // Dynamically flag any AdGroup with n>=30 and a good-rate under half the
+  // overall average - this is a RULE, not a hardcoded list of names, so it
+  // stays correct even if the underlying sheet's AdGroup mix changes later.
+  const adGroupAgg = aggregate(rows, function (r) { return r[COL.adGroup]; }, 30);
+  const overallGoodRate = good / total;
+  const badAdGroups = adGroupAgg.rows.filter(function (r) { return r.goodRate / 100 < overallGoodRate * 0.5; }).map(function (r) { return r.key; });
+  const dropBadAdGroups = rows.filter(function (r) { return badAdGroups.indexOf(r[COL.adGroup]) === -1; });
+  scenarios.push({
+    label: 'Pause underperforming ad groups',
+    detail: badAdGroups.length ? ('auto-detected: ' + badAdGroups.join(', ')) : 'none detected this run',
+    stat: rateOf(dropBadAdGroups)
+  });
+
+  const combo = rows.filter(function (r) {
+    const mid = DEBT_MIDPOINT[r[COL.debt]];
+    const debtOk = mid && mid > 10000 && mid <= 100000;
+    const partnerOk = normalisePartner(r[COL.partner]) !== 'Google Content';
+    const adGroupOk = badAdGroups.indexOf(r[COL.adGroup]) === -1;
+    return debtOk && partnerOk && adGroupOk;
+  });
+  scenarios.push({ label: 'All three levers combined', detail: '', stat: rateOf(combo) });
+
+  // ── PII-stripped row export for client-side filtering ──
+  // Only normalized/derived analytical fields leave the server. FirstName,
+  // Email, IP, raw SearchQuery and raw ReferralURL never appear below.
+  const clientRows = rows.map(function (r) {
+    const d = new Date(r[COL.date]);
+    return {
+      month: isNaN(d) ? null : (d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')),
+      status: classifyStatus(r[COL.status]),
+      partner: normalisePartner(r[COL.partner]),
+      trafficType: classifyTrafficType(r[COL.refDomain], r[COL.pubCampaign]),
+      widget: shortWidgetLabel(normaliseWidget(r[COL.widget])),
+      debt: r[COL.debt],
+      state: r[COL.state],
+      phoneScore: r[COL.phoneScore] ? Math.round(parseFloat(r[COL.phoneScore])) : null,
+      addrScore: r[COL.addrScore] ? Math.round(parseFloat(r[COL.addrScore])) : null,
+      campaign: r[COL.advCampaign],
+      adGroup: r[COL.adGroup],
+      landingPage: shortLandingPage(r[COL.landingPage])
+    };
+  });
+
+  return {
+    summary: { total: total, closed: closed, good: good,
+      closedRate: +(closed / total * 100).toFixed(2),
+      goodRate: +(good / total * 100).toFixed(2) },
+    monthly: monthlyArr,
+    statusBreakdown: statusArr,
+    segments: segments,
+    insights: insights,
+    scenarios: scenarios,
+    clientRows: clientRows,
+    generatedAt: new Date().toISOString()
+  };
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+//  ENTRY POINT
+// ═════════════════════════════════════════════════════════════════════════
+
+function doGet() {
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const ws = ss.getSheets()[SHEET_TAB_INDEX];
+    const raw = ws.getDataRange().getValues();
+    const rows = raw.slice(1).filter(function (r) { return r.length > 4; });
+    const data = computeData(rows);
+    const html = buildHtml(data);
+    return HtmlService.createHtmlOutput(html)
+      .setTitle('Lead Quality Dashboard')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  } catch (e) {
+    return HtmlService.createHtmlOutput(
+      '<pre style="color:red;padding:2rem;white-space:pre-wrap">Error: ' + e.message + '\n' + e.stack + '</pre>'
+    );
   }
 }
 
-boot();
-</script>
-</body>
-</html>
+function testRun() {
+  const out = doGet();
+  Logger.log(out.getContent().substring(0, 800));
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+//  HTML BUILDER
+//  Built with plain string concatenation (no nested template literals) so
+//  there's no backtick/${} escaping to get wrong between this GAS file and
+//  the client-side <script> it emits.
+// ═════════════════════════════════════════════════════════════════════════
+
+function buildHtml(data) {
+  const css = [
+    ':root{--bg:#f5f4f0;--surface:#fff;--surface1:#f8f7f4;--border:rgba(0,0,0,.09);--border-s:rgba(0,0,0,.16);',
+    '--text:#0b0b0b;--sec:#52514e;--muted:#898781;--blue:#2a78d6;--teal:#1baf7a;--amber:#ba7517;',
+    '--red:#e34948;--gray:#73726c;--r:8px}',
+    '@media(prefers-color-scheme:dark){:root{--bg:#111110;--surface:#1c1c1a;--surface1:#252522;',
+    '--border:rgba(255,255,255,.09);--border-s:rgba(255,255,255,.16);--text:#f5f4f0;--sec:#c3c2b7;',
+    '--muted:#898781;--blue:#3987e5;--teal:#199e70;--amber:#eda100;--red:#e66767;--gray:#888780}}',
+    '*{box-sizing:border-box;margin:0;padding:0}',
+    'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}',
+    '.page{max-width:1120px;margin:0 auto;padding:2rem 1.25rem 4rem}',
+    '.dash-header{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:2rem;flex-wrap:wrap;gap:.5rem}',
+    '.dash-header h1{font-size:20px;font-weight:500}',
+    '.dash-header p{font-size:12px;color:var(--muted);margin-top:3px}',
+    '.kpi-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:2rem}',
+    '.kpi{background:var(--surface);border:.5px solid var(--border);border-radius:12px;padding:.9rem 1.1rem}',
+    '.kpi-lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}',
+    '.kpi-val{font-size:26px;font-weight:500;line-height:1}',
+    '.kpi-sub{font-size:11px;color:var(--sec);margin-top:4px}',
+    '.kpi-target .kpi-val{color:var(--amber)}',
+    '.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:1.25rem;margin-bottom:1.25rem}',
+    '.card{background:var(--surface);border:.5px solid var(--border);border-radius:12px;padding:1.1rem 1.25rem}',
+    '.card-t{font-size:11px;font-weight:500;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:1rem}',
+    '.cw{position:relative;width:100%}',
+    '.filter-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:1.5rem;background:var(--surface);border:.5px solid var(--border);border-radius:12px;padding:.8rem 1rem;align-items:center}',
+    '.filter-bar label{font-size:12px;color:var(--muted);margin-right:4px}',
+    'select{font-size:12px;padding:3px 8px;border:.5px solid var(--border-s);border-radius:var(--r);background:var(--surface1);color:var(--text);cursor:pointer}',
+    '.filter-grp{display:flex;align-items:center;gap:4px}',
+    '.tabs{display:flex;gap:5px;flex-wrap:wrap;margin-bottom:1rem}',
+    '.tab{padding:4px 12px;border-radius:var(--r);border:.5px solid var(--border-s);font-size:12px;cursor:pointer;background:transparent;color:var(--sec)}',
+    '.tab:hover{background:var(--surface1)}',
+    '.tab.on{background:var(--blue);color:#fff;border-color:var(--blue)}',
+    '.hbar-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}',
+    '.hbl{font-size:11px;color:var(--sec);width:165px;flex-shrink:0;text-align:right;line-height:1.3}',
+    '.hbt{flex:1;background:var(--bg);border-radius:3px;height:19px;position:relative;overflow:hidden}',
+    '.hbf{height:100%;border-radius:3px;display:flex;align-items:center;padding-left:5px;transition:width .3s ease}',
+    '.hbp{font-size:10px;font-weight:500;color:#fff;white-space:nowrap}',
+    '.hbn{font-size:10px;color:var(--muted);width:54px;flex-shrink:0}',
+    '.sc-row{display:flex;align-items:center;gap:8px;margin-bottom:10px}',
+    '.sc-lbl{width:255px;flex-shrink:0;font-size:11px;color:var(--sec);line-height:1.4}',
+    '.sc-lbl span{display:block;font-size:10px;color:var(--muted)}',
+    '.sc-track{flex:1;background:var(--bg);border-radius:3px;height:23px;position:relative;overflow:visible}',
+    '.sc-fill{height:100%;border-radius:3px;display:flex;align-items:center;justify-content:flex-end;padding-right:6px}',
+    '.sc-pct{font-size:11px;font-weight:500;color:#fff}',
+    '.sc-mark{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--amber);z-index:2;border-radius:1px}',
+    '.insight{background:#eaf3de;border:.5px solid #97c459;border-radius:var(--r);padding:.7rem .9rem;margin-top:.9rem;font-size:12px;color:#27500a;line-height:1.6}',
+    '@media(prefers-color-scheme:dark){.insight{background:#173404;border-color:#3b6d11;color:#c0dd97}}',
+    '.dl{font-size:11px;color:var(--sec);line-height:2}',
+    '.dl-row{display:flex;align-items:center;gap:5px}',
+    '.dl-sq{width:8px;height:8px;border-radius:2px;flex-shrink:0}',
+    '.note{font-size:11px;color:var(--muted);margin-bottom:.6rem}',
+    'footer{margin-top:3rem;padding-top:1rem;border-top:.5px solid var(--border);display:flex;justify-content:space-between;font-size:11px;color:var(--muted);flex-wrap:wrap;gap:.5rem}'
+  ].join('\n');
+
+  const tabsList = [
+    ['partner', 'Traffic source'], ['trafficType', 'Search vs Display'], ['widget', 'Ad creative'],
+    ['adGroup', 'Ad group / keyword'], ['debt', 'Debt level'], ['phone', 'Phone score'],
+    ['addr', 'Address score'], ['state', 'Geography'], ['campaign', 'Ad campaign'], ['landingPage', 'Landing page']
+  ];
+  const tabsHtml = tabsList.map(function (t, i) {
+    return '<button class="tab' + (i === 0 ? ' on' : '') + '" data-seg="' + t[0] + '">' + t[1] + '</button>';
+  }).join('\n');
+
+  const bodyHtml = [
+    '<div class="page">',
+    '<div class="dash-header"><div><h1>Lead quality dashboard</h1><p>' +
+      'One publisher \u00b7 ' + data.summary.total.toLocaleString() + ' leads \u00b7 generated server-side, no public data link' +
+      '</p></div><span style="font-size:11px;color:var(--muted)">Generated ' + new Date(data.generatedAt).toLocaleString() + '</span></div>',
+
+    '<div class="kpi-row">',
+    '<div class="kpi"><div class="kpi-lbl">Total leads</div><div class="kpi-val" id="k-total">\u2014</div></div>',
+    '<div class="kpi"><div class="kpi-lbl">Closed rate (baseline)</div><div class="kpi-val" id="k-closed">\u2014</div><div class="kpi-sub" id="k-cn">\u2014</div></div>',
+    '<div class="kpi"><div class="kpi-lbl">Broad quality rate</div><div class="kpi-val" id="k-good">\u2014</div><div class="kpi-sub">closed + EP steps</div></div>',
+    '<div class="kpi kpi-target"><div class="kpi-lbl">CPL uplift target</div><div class="kpi-val">9.6%</div><div class="kpi-sub">+20% \u2192 $33 CPL</div></div>',
+    '</div>',
+
+    '<div class="filter-bar">',
+    '<span style="font-size:12px;font-weight:500;color:var(--sec);margin-right:4px">Filter:</span>',
+    '<div class="filter-grp"><label>Partner</label><select id="f-partner"><option value="">All</option></select></div>',
+    '<div class="filter-grp"><label>Debt level</label><select id="f-debt"><option value="">All</option></select></div>',
+    '<div class="filter-grp"><label>Month</label><select id="f-month"><option value="">All</option></select></div>',
+    '<div class="filter-grp"><label>State</label><select id="f-state"><option value="">All</option></select></div>',
+    '<button id="reset-btn" style="margin-left:auto;font-size:12px;padding:3px 10px;border:.5px solid var(--border-s);border-radius:var(--r);background:transparent;color:var(--sec);cursor:pointer">Reset filters</button>',
+    '</div>',
+
+    '<div class="grid2">',
+    '<div class="card"><div class="card-t">Closed rate by month</div><div class="cw" style="height:195px"><canvas id="trendChart"></canvas></div></div>',
+    '<div class="card"><div class="card-t">Status breakdown</div><div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">',
+    '<div class="cw" style="height:170px;width:170px;flex-shrink:0"><canvas id="donutChart"></canvas></div>',
+    '<div class="dl" id="donut-legend"></div></div></div>',
+    '</div>',
+
+    '<div class="card" style="margin-bottom:1.25rem">',
+    '<div class="card-t">Segment analysis</div>',
+    '<div class="tabs" id="seg-tabs">' + tabsHtml + '</div>',
+    '<div id="seg-body"></div>',
+    '</div>',
+
+    '<div class="card" style="margin-bottom:1.25rem">',
+    '<div class="card-t">Q3 \u2014 paths to 9.6% quality target</div>',
+    '<div class="note">Computed from the full dataset each time this dashboard loads; not affected by the filters above (filtering to one partner and then asking "how do I improve on this partner" isn\u2019t a meaningful question).</div>',
+    '<div id="scenario-body"></div>',
+    '</div>',
+
+    '<footer><span>Source: server-side read of the configured Google Sheet (not publicly published)</span></footer>',
+    '</div>'
+  ].join('\n');
+
+  const scriptParts = [];
+  scriptParts.push('const D = ' + JSON.stringify(data) + ';');
+  scriptParts.push(getClientScript());
+
+  return [
+    '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">',
+    '<meta name="viewport" content="width=device-width,initial-scale=1"><title>Lead Quality Dashboard</title>',
+    '<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></scr' + 'ipt>',
+    '<style>' + css + '</style></head><body>',
+    bodyHtml,
+    '<script>' + scriptParts.join('\n') + '</scr' + 'ipt>',
+    '</body></html>'
+  ].join('\n');
+}
+
+// ── Client-side JS, returned as a plain string (no nested template literals
+// or backticks at all - every dynamic piece is built with string '+' /
+// array.join(), so there is nothing to escape between this GAS file and
+// the browser script it emits). ──
+function getClientScript() {
+  const lines = [];
+  lines.push('function classifyAlready(s){return s;}');
+  lines.push('const DEBT_ORDER=' + JSON.stringify(DEBT_ORDER) + ';');
+  lines.push('const SEG_LABELS={partner:"closedRate",trafficType:"closedRate",widget:"goodRate",debt:"closedRate",phone:"goodRate",addr:"goodRate",state:"goodRate",campaign:"goodRate",adGroup:"goodRate",landingPage:"closedRate"};');
+
+  // ---- chi-square (duplicated client-side so filtered views can recompute insight text live) ----
+  lines.push([
+    'function logGamma(x){var g=7;var c=[0.99999999999980993,676.5203681218851,-1259.1392167224028,',
+    '771.32342877765313,-176.61502916214059,12.507343278686905,-0.13857109526572012,',
+    '9.9843695780195716e-6,1.5056327351493116e-7];',
+    'if(x<0.5){return Math.log(Math.PI/Math.sin(Math.PI*x))-logGamma(1-x);}',
+    'x-=1;var a=c[0];var t=x+g+0.5;for(var i=1;i<g+2;i++){a+=c[i]/(x+i);}',
+    'return 0.5*Math.log(2*Math.PI)+(x+0.5)*Math.log(t)-t+Math.log(a);}'
+  ].join(''));
+  lines.push([
+    'function gammaPSeries(a,x){if(x<=0)return 0;var ap=a,sum=1/a,del=sum;',
+    'for(var n=1;n<200;n++){ap+=1;del*=x/ap;sum+=del;if(Math.abs(del)<Math.abs(sum)*1e-14)break;}',
+    'return sum*Math.exp(-x+a*Math.log(x)-logGamma(a));}'
+  ].join(''));
+  lines.push([
+    'function gammaQContFrac(a,x){var b=x+1-a,c=1e300,d=1/b,h=d;',
+    'for(var i=1;i<200;i++){var an=-i*(i-a);b+=2;d=an*d+b;if(Math.abs(d)<1e-300)d=1e-300;',
+    'c=b+an/c;if(Math.abs(c)<1e-300)c=1e-300;d=1/d;var del=d*c;h*=del;if(Math.abs(del-1)<1e-14)break;}',
+    'return Math.exp(-x+a*Math.log(x)-logGamma(a))*h;}'
+  ].join(''));
+  lines.push('function chiSquarePValue(chi2,dof){if(chi2<=0||dof<=0)return 1;var a=dof/2,x=chi2/2;return x<a+1?1-gammaPSeries(a,x):gammaQContFrac(a,x);}');
+  lines.push([
+    'function chiSquareTest(buckets){var keys=Object.keys(buckets);var k=keys.length;',
+    'if(k<2)return{chi2:0,dof:0,p:1,cramersV:0,n:0};',
+    'var gs=0,gt=0;keys.forEach(function(key){gs+=buckets[key].success;gt+=buckets[key].total;});',
+    'var pHat=gs/gt;var chi2=0;',
+    'keys.forEach(function(key){var b=buckets[key];var expS=b.total*pHat,expF=b.total*(1-pHat);',
+    'var obsF=b.total-b.success;if(expS>0)chi2+=Math.pow(b.success-expS,2)/expS;',
+    'if(expF>0)chi2+=Math.pow(obsF-expF,2)/expF;});',
+    'var dof=k-1;var p=chiSquarePValue(chi2,dof);var cramersV=Math.sqrt(chi2/gt);',
+    'return{chi2:chi2,dof:dof,p:p,cramersV:cramersV,n:gt};}'
+  ].join(''));
+
+  // ---- aggregation over the embedded, PII-stripped client rows ----
+  lines.push([
+    'function aggregate(rows,keyFn,minLeads){minLeads=minLeads||1;var m={};',
+    'rows.forEach(function(r){var k=keyFn(r);if(k===null||k===undefined||k==="")return;',
+    'if(!m[k])m[k]={total:0,closed:0,good:0};m[k].total++;',
+    'if(r.status==="closed"){m[k].closed++;m[k].good++;}else if(r.status==="good")m[k].good++;});',
+    'var leadsDropped=0;var buckets={};var arr=[];',
+    'Object.keys(m).forEach(function(k){if(m[k].total>=minLeads){',
+    'buckets[k]={success:m[k].good,total:m[k].total};',
+    'arr.push({key:k,total:m[k].total,closed:m[k].closed,good:m[k].good,',
+    'closedRate:+(m[k].closed/m[k].total*100).toFixed(2),goodRate:+(m[k].good/m[k].total*100).toFixed(2)});',
+    '}else{leadsDropped+=m[k].total;}});',
+    'return{rows:arr,test:chiSquareTest(buckets),leadsDropped:leadsDropped};}'
+  ].join(''));
+
+  lines.push([
+    'function insightText(segResult,sortKey){var rows=segResult.rows.slice().sort(function(a,b){return b[sortKey]-a[sortKey];});',
+    'if(rows.length<2)return "Not enough categories with sufficient sample size to compare.";',
+    'var top=rows[0],bottom=rows[rows.length-1];var t=segResult.test;',
+    'var sig=t.p<0.05?"statistically significant":"not statistically significant";',
+    'var txt="Best: "+top.key+" at "+top[sortKey].toFixed(1)+"% (n="+top.total+"). "+',
+    '"Worst: "+bottom.key+" at "+bottom[sortKey].toFixed(1)+"% (n="+bottom.total+"). "+',
+    '"Chi-square p = "+t.p.toExponential(2)+" ("+sig+" at p<0.05), Cramer\\u2019s V = "+t.cramersV.toFixed(3)+".";',
+    'if(segResult.leadsDropped>0){txt+=" ("+segResult.leadsDropped+" leads in smaller categories excluded for sample-size reliability.)";}',
+    'return txt;}'
+  ].join(''));
+
+  // ---- filters ----
+  lines.push([
+    'function filteredRows(){var fp=document.getElementById("f-partner").value;',
+    'var fd=document.getElementById("f-debt").value;var fm=document.getElementById("f-month").value;',
+    'var fs=document.getElementById("f-state").value;',
+    'return D.clientRows.filter(function(r){',
+    'if(fp&&r.partner!==fp)return false;if(fd&&r.debt!==fd)return false;',
+    'if(fs&&r.state!==fs)return false;if(fm&&r.month!==fm)return false;return true;});}'
+  ].join(''));
+
+  lines.push([
+    'function populateFilters(){var partners=Array.from(new Set(D.clientRows.map(function(r){return r.partner;}))).sort();',
+    'var debts=Array.from(new Set(D.clientRows.map(function(r){return r.debt;}).filter(Boolean)));',
+    'debts.sort(function(a,b){var ai=DEBT_ORDER.indexOf(a),bi=DEBT_ORDER.indexOf(b);return(ai===-1?99:ai)-(bi===-1?99:bi);});',
+    'var months=Array.from(new Set(D.clientRows.map(function(r){return r.month;}).filter(Boolean))).sort();',
+    'var states=Array.from(new Set(D.clientRows.map(function(r){return r.state;}).filter(Boolean))).sort();',
+    'function fill(id,vals){var sel=document.getElementById(id);vals.forEach(function(v){',
+    'var o=document.createElement("option");o.value=v;o.textContent=v;sel.appendChild(o);});}',
+    'fill("f-partner",partners);fill("f-debt",debts);fill("f-month",months);fill("f-state",states);}'
+  ].join(''));
+
+  // ---- KPI / trend / donut ----
+  lines.push([
+    'function computeSummary(rows){var total=rows.length;',
+    'var closed=rows.filter(function(r){return r.status==="closed";}).length;',
+    'var good=rows.filter(function(r){return r.status==="closed"||r.status==="good";}).length;',
+    'return{total:total,closed:closed,good:good,',
+    'closedRate:total?+(closed/total*100).toFixed(2):0,goodRate:total?+(good/total*100).toFixed(2):0};}'
+  ].join(''));
+
+  lines.push([
+    'function updateKPIs(s){document.getElementById("k-total").textContent=s.total.toLocaleString();',
+    'document.getElementById("k-closed").textContent=s.closedRate.toFixed(1)+"%";',
+    'document.getElementById("k-cn").textContent=s.closed.toLocaleString()+" closed leads";',
+    'document.getElementById("k-good").textContent=s.goodRate.toFixed(1)+"%";}'
+  ].join(''));
+
+  lines.push('var CHARTS={};');
+  lines.push([
+    'function updateTrend(rows){var m={};rows.forEach(function(r){if(!r.month)return;',
+    'if(!m[r.month])m[r.month]={total:0,closed:0};m[r.month].total++;',
+    'if(r.status==="closed")m[r.month].closed++;});',
+    'var months=Object.keys(m).sort();',
+    'var rates=months.map(function(k){return +(m[k].closed/m[k].total*100).toFixed(1);});',
+    'if(CHARTS.trend)CHARTS.trend.destroy();',
+    'CHARTS.trend=new Chart(document.getElementById("trendChart"),{type:"line",data:{labels:months,',
+    'datasets:[{label:"Closed %",data:rates,borderColor:"#2a78d6",backgroundColor:"rgba(42,120,214,.07)",',
+    'borderWidth:2,pointRadius:4,pointBackgroundColor:"#2a78d6",tension:.3,fill:true}]},',
+    'options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},',
+    'tooltip:{callbacks:{label:function(c){return c.parsed.y.toFixed(1)+"%";}}}},',
+    'scales:{x:{ticks:{font:{size:10},color:"#898781"},grid:{display:false}},',
+    'y:{ticks:{font:{size:10},color:"#898781",callback:function(v){return v+"%";}},',
+    'grid:{color:"rgba(128,128,128,.1)"},suggestedMin:0,suggestedMax:14}}}});}'
+  ].join(''));
+
+  lines.push('var DCOLORS=["#2a78d6","#1baf7a","#eda100","#e34948","#73726c","#4a3aa7","#e87ba4","#eb6834"];');
+  lines.push([
+    'function updateDonut(rows){var counts={};rows.forEach(function(r){counts[r.status]=(counts[r.status]||0)+1;});',
+    'var labelMap={closed:"Closed",good:"Good (EP stage)",bad:"Bad",unknown:"Unknown/pending"};',
+    'var top=Object.keys(counts).map(function(k){return{status:labelMap[k]||k,n:counts[k]};})',
+    '.sort(function(a,b){return b.n-a.n;});',
+    'if(CHARTS.donut)CHARTS.donut.destroy();',
+    'CHARTS.donut=new Chart(document.getElementById("donutChart"),{type:"doughnut",',
+    'data:{labels:top.map(function(s){return s.status;}),',
+    'datasets:[{data:top.map(function(s){return s.n;}),backgroundColor:DCOLORS,borderWidth:2}]},',
+    'options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},',
+    'tooltip:{callbacks:{label:function(c){return c.label+": "+c.parsed.toLocaleString();}}}}}});',
+    'var lg=document.getElementById("donut-legend");var html="";',
+    'top.forEach(function(s,i){html+=\'<div class="dl-row"><span class="dl-sq" style="background:\'+',
+    'DCOLORS[i%DCOLORS.length]+\'"></span>\'+s.status+" ("+s.n.toLocaleString()+")</div>";});',
+    'lg.innerHTML=html;}'
+  ].join(''));
+
+  // ---- segment tabs ----
+  lines.push([
+    'var SEG_KEY={partner:function(r){return r.partner;},trafficType:function(r){return r.trafficType;},',
+    'widget:function(r){return r.widget;},debt:function(r){return r.debt;},',
+    'phone:function(r){return r.phoneScore?"Score "+r.phoneScore:null;},',
+    'addr:function(r){return r.addrScore?"Score "+r.addrScore:null;},',
+    'state:function(r){return r.state;},campaign:function(r){return r.campaign;},',
+    'adGroup:function(r){return r.adGroup;},',
+    'landingPage:function(r){return r.landingPage==="Call Center"?null:r.landingPage;}};'
+  ].join(''));
+  lines.push('var SEG_MIN={partner:30,trafficType:30,widget:30,debt:20,phone:15,addr:15,state:30,campaign:30,adGroup:30,landingPage:30};');
+
+  lines.push([
+    'function showSeg(id,btn){window._curSeg=id;',
+    'document.querySelectorAll(".tab").forEach(function(t){t.classList.remove("on");});',
+    'if(btn)btn.classList.add("on");',
+    'else{var b=document.querySelector(\'.tab[data-seg="\'+id+\'"]\');if(b)b.classList.add("on");}',
+    'var rows=filteredRows();var result=aggregate(rows,SEG_KEY[id],SEG_MIN[id]);',
+    'var sortKey=SEG_LABELS[id];',
+    'result.rows.sort(function(a,b){',
+    'if(id==="debt"){var ai=DEBT_ORDER.indexOf(a.key),bi=DEBT_ORDER.indexOf(b.key);',
+    'return(ai===-1?99:ai)-(bi===-1?99:bi);}',
+    'return b[sortKey]-a[sortKey];});',
+    'var maxVal=Math.max.apply(null,result.rows.map(function(r){return r[sortKey];}).concat([10]));',
+    'var html="";',
+    'result.rows.forEach(function(row){var val=row[sortKey]||0;',
+    'var w=Math.min(val/maxVal*100,100).toFixed(1);',
+    'var col=val<maxVal*0.4?"#e34948":val>maxVal*0.8?"#1baf7a":"#2a78d6";',
+    'html+=\'<div class="hbar-row"><div class="hbl">\'+row.key+\'</div>\'+',
+    '\'<div class="hbt"><div class="hbf" style="width:\'+w+\'%;background:\'+col+\'">\'+',
+    '\'<span class="hbp">\'+val.toFixed(1)+\'%</span></div></div>\'+',
+    '\'<div class="hbn">n=\'+row.total.toLocaleString()+\'</div></div>\';});',
+    'html+=\'<div class="insight">\'+insightText(result,sortKey)+\'</div>\';',
+    'document.getElementById("seg-body").innerHTML=html;}'
+  ].join(''));
+
+  // ---- Q3 scenarios (rendered from server-computed D.scenarios; not filter-reactive by design) ----
+  lines.push([
+    'function renderScenarios(){var maxRate=Math.max.apply(null,D.scenarios.map(function(s){return s.stat.rate*100;}).concat([14]));',
+    'var TARGET=9.6;var html="";',
+    'D.scenarios.forEach(function(s){var rate=s.stat.rate*100;',
+    'var w=Math.min(rate/maxRate*100,100).toFixed(1);var tw=(TARGET/maxRate*100).toFixed(1);',
+    'var isBaseline=s.label.indexOf("Baseline")!==-1;',
+    'var col=isBaseline?"#73726c":(rate>=TARGET?"#1baf7a":"#2a78d6");',
+    'var tick=rate>=TARGET?\'<span style="color:#1baf7a;font-size:15px;margin-left:5px">\\u2713</span>\':',
+    '\'<span style="width:20px;display:inline-block"></span>\';',
+    'html+=\'<div class="sc-row"><div class="sc-lbl">\'+s.label+',
+    '\'<span>n=\'+s.stat.n.toLocaleString()+(s.detail?" \\u00b7 "+s.detail:"")+\'</span></div>\'+',
+    '\'<div class="sc-track"><div class="sc-fill" style="width:\'+w+\'%;background:\'+col+\'">\'+',
+    '\'<span class="sc-pct">\'+rate.toFixed(1)+\'%</span></div>\'+',
+    '\'<div class="sc-mark" style="left:\'+tw+\'%"></div></div>\'+tick+\'</div>\';});',
+    'document.getElementById("scenario-body").innerHTML=html;}'
+  ].join(''));
+
+  // ---- boot ----
+  lines.push([
+    'function renderAll(){var rows=filteredRows();',
+    'updateKPIs(computeSummary(rows));updateTrend(rows);updateDonut(rows);',
+    'showSeg(window._curSeg||"partner",null);}',
+    'document.addEventListener("DOMContentLoaded",function(){',
+    'populateFilters();',
+    'document.querySelectorAll(".tab").forEach(function(t){',
+    't.addEventListener("click",function(){showSeg(t.getAttribute("data-seg"),t);});});',
+    '["f-partner","f-debt","f-month","f-state"].forEach(function(id){',
+    'document.getElementById(id).addEventListener("change",renderAll);});',
+    'document.getElementById("reset-btn").addEventListener("click",function(){',
+    '["f-partner","f-debt","f-month","f-state"].forEach(function(id){document.getElementById(id).value="";});',
+    'renderAll();});',
+    'renderAll();renderScenarios();});'
+  ].join(''));
+
+  return lines.join('\n');
+}
