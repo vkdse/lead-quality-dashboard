@@ -177,11 +177,14 @@ footer{margin-top:3rem;padding-top:1rem;border-top:0.5px solid var(--border);
     <div class="card-t">Segment analysis</div>
     <div class="tabs">
       <button class="tab on" onclick="showSeg('partner',this)">Traffic source</button>
+      <button class="tab" onclick="showSeg('trafficType',this)">Search vs Display</button>
       <button class="tab" onclick="showSeg('widget',this)">Ad creative</button>
+      <button class="tab" onclick="showSeg('adGroup',this)">Ad group / keyword</button>
       <button class="tab" onclick="showSeg('debt',this)">Debt level</button>
       <button class="tab" onclick="showSeg('phone',this)">Phone score</button>
       <button class="tab" onclick="showSeg('state',this)">Geography</button>
       <button class="tab" onclick="showSeg('campaign',this)">Ad campaign</button>
+      <button class="tab" onclick="showSeg('landingPage',this)">Landing page</button>
     </div>
     <div id="seg-body"></div>
   </div>
@@ -194,8 +197,9 @@ footer{margin-top:3rem;padding-top:1rem;border-top:0.5px solid var(--border);
     </div>
     <div id="scenario-body"></div>
     <div class="insight">
-      <strong>Lever 1 alone</strong> (drop Google Content Network) reaches 9.2% and grows absolute revenue ~4% — the CPL premium more than offsets the 21% volume loss.
-      Combine with the <strong>debt floor filter ($10k min)</strong> and quality clears 10.3%, well above the 9.6% target.
+      <strong>Three independent levers each clear 9.0%+ on their own.</strong>
+      Lever 3 (pause Student Debt + Loan Default AdGroups) is the highest-impact single action: 387 Student Debt leads convert at just 1.0% — pausing this AdGroup alone reaches 9.4% with minimal volume loss.
+      Combined Levers 1+3 reach 9.9%, and all three together hit 11.1% — well above the 9.6% target.
     </div>
   </div>
 
@@ -218,7 +222,8 @@ const C = {
   date:0, firstName:1, email:2, leadId:3, status:4, widget:5,
   zone:6, pubCampaign:7, addrScore:8, phoneScore:9, advCampaign:10,
   state:11, debt:12, ip:13, partner:14, refDomain:15,
-  mktCampaign:16, adGroup:17, keyword:18, searchQuery:19
+  mktCampaign:16, adGroup:17, keyword:18, searchQuery:19,
+  refUrl:20, refUrlParams:21, landingPage:22
 };
 
 // ── Quality classification ────────────────────────────────────────────────────
@@ -231,6 +236,53 @@ function qClass(s){ return !s?'unk': s==='Closed'?'closed': GOOD.has(s)?'good': 
 const P_MAP = {google:'Google Search',Google:'Google Content',yahoo:'Yahoo Search',
                AdKnowledge:'AdKnowledge',Call_Center:'Call Center','Advertise.com':'Advertise.com'};
 function normPartner(p){ return P_MAP[p]||p||'Unknown'; }
+
+// ── Traffic type from ReferralDomain (Search vs Display/Content) ──────────────
+const SEARCH_KEYWORDS = ['search.yahoo.com','www.google.com','www.bing.com','search.aol.com',
+  'search.mywebsearch.com','searchportal.information.com','www.ask.com','www.webcrawler.com',
+  'www.dogpile.com','search.live.com','www.altavista.com','search.earthlink.net',
+  'search.netzero.net','search.comcast.net','search.conduit.com','search.alot.com',
+  'search.myway.com','search.incredimail.com','search.bearshare.com','search.cbsnews.com',
+  'search.cnbc.com','search.cnn.com','search.money.cnn.com','search.netscape.com',
+  'search.pch.com','search.rr.com','search.shareazaweb.com','search.viewpoint.com',
+  'search.embarq.com','finder.cox.net','results.freeze.com','results.mindspark.com',
+  'searchguide.frontiernet.net','us.yhs.search.yahoo.com','espanol.search.yahoo.com',
+  'news.search.yahoo.com','aim.search.aol.com','cnn.search.aol.com','aolsearcht',
+  'search.dnsassist','search.domainnotfound','fastbrowsersearch','websearch.cs.com',
+  'websearch.verizon.net','www.findstuff.com','www.info.com','webhelp.qwest.net',
+  'wwk.searchresults','www2.searchresultsdirect','search1.info.com','search2.comcast',
+  'search6.info','search7.info','search23.info','search25.info','search26.info','search28.info',
+  'int.ask.com','mws.ask.com','dir.yahoo.com','yp.yahoo.com','news.google.com','maps.google.com',
+  'my.att.net','www.att.net','netmail.verizon.net','home.myhughesnet.com'];
+const DISPLAY_KEYWORDS = ['doubleclick.net','googlesyndication.com','googleadservices.com',
+  'ads.cnn.com','mm.chitika.net','shop.simpli.com','landings.trafficz','turing.oversee.net',
+  'adkdomains.com','park.parkingpanel.com','ezinearticles.com','www.ehow.com',
+  'www.soyouwanna.com','wiki.answers.com','answers.yahoo.com','www.wikihow.com',
+  'www.wisegeek.com','www.doityourself.com','about.com','finance.kosmix.com',
+  'www.docstoc.com','www.life123.com','www.mahalo.com','www.toseeka.com','www.buzzle.com',
+  'www.crawler.com','www.scribd.com','www.articlesbase.com','www.answerbag.com',
+  'www.thefreedictionary.com','encyclopedia.thefreedictionary.com','www.thefreelibrary.com',
+  'www.allexperts.com','en.allexperts.com','videos.howstuffworks.com','www.thriftyfun.com',
+  'www.msnbc.msn.com','moneycentral.msn.com','www.usnews.com','www.usatoday.com',
+  'www.reuters.com','www.businessweek.com','cbs2.com','www.myfoxdc.com','www.youtube.com',
+  'www.zimbio.com','www.docstoc.com'];
+function classifyTraffic(domain){
+  if(!domain||domain==='') return 'No Referrer';
+  const d=domain.toLowerCase();
+  if(d.includes('debtreductioninc.com')) return 'Direct / Internal';
+  for(const k of SEARCH_KEYWORDS){ if(d.includes(k)) return 'Search'; }
+  for(const k of DISPLAY_KEYWORDS){ if(d.includes(k)) return 'Display / Content'; }
+  if(d.includes('mail.')||d.includes('webmail')) return 'Email / Webmail';
+  return 'Other';
+}
+
+// ── Landing page short label ──────────────────────────────────────────────────
+function shortLP(url){
+  if(!url) return 'Unknown';
+  if(url.includes('callcenter')||url.includes('inadcoad')) return 'Call Center';
+  const m=url.match(/index(\d+)\.html/);
+  return m ? `index${m[1]}.html` : url.split('/').pop()||url;
+}
 
 // ── Debt order ────────────────────────────────────────────────────────────────
 const DEBT_ORD = ['7500-10000','10001-15000','15001-20000','20001-30000',
@@ -317,9 +369,19 @@ function compute(rows){
     .sort((a,b)=>a.key.localeCompare(b.key));
   const state=agg(rows,r=>r[C.state]).filter(d=>d.total>=30).sort((a,b)=>b.goodRate-a.goodRate).slice(0,15);
   const campaign=agg(rows,r=>r[C.advCampaign]||'Unknown').sort((a,b)=>b.goodRate-a.goodRate);
+  const adGroup=agg(rows,r=>r[C.adGroup]).filter(d=>d.total>=5).sort((a,b)=>b.goodRate-a.goodRate);
+
+  // NEW: traffic type (Search vs Display/Content from ReferralDomain)
+  const TRAFFIC_ORDER=['Search','Email / Webmail','No Referrer','Other','Direct / Internal','Display / Content'];
+  const trafficType=agg(rows,r=>classifyTraffic(r[C.refDomain]))
+    .sort((a,b)=>(TRAFFIC_ORDER.indexOf(a.key)||99)-(TRAFFIC_ORDER.indexOf(b.key)||99));
+
+  // NEW: landing page (web only, call center excluded from chart but shown for context)
+  const landingPage=agg(rows,r=>shortLP(r[C.landingPage]))
+    .sort((a,b)=>b.total-a.total);
 
   return {total,closed,good,closedRate:+(closed/total*100).toFixed(1),goodRate:+(good/total*100).toFixed(1),
-    monthly,statusArr,partner,widget,debt,phone,state,campaign};
+    monthly,statusArr,partner,widget,debt,phone,state,campaign,adGroup,trafficType,landingPage};
 }
 
 // ── Populate filter dropdowns ─────────────────────────────────────────────────
@@ -434,8 +496,8 @@ function updateDonut(statusArr, total){
 // ── Segment bars ──────────────────────────────────────────────────────────────
 const SEG_CFG={
   partner:{key:'key',metric:'closedRate',label:'Closed rate',maxP:20,wide:false,
-    color:d=>d.closedRate<5?'#e34948':d.closedRate>11?'#1baf7a':'#2a78d6',
-    insight:'Google Content (AdSense/display) converts at just 4.1% — half the 8.1% baseline. Reassigning that budget to AdKnowledge or Yahoo Search is the single highest-leverage traffic move.',warn:''},
+    color:d=>d.closedRate<5?'#e34948':d.closedRate>10?'#1baf7a':'#2a78d6',
+    insight:'Google Content/Display network converts at just 4.1% — less than half the 8.1% baseline. AdKnowledge leads at 12.3%. Google Search (9.9%) and Yahoo Search (7.7%) are mid-tier. Reassigning content-network budget to AdKnowledge is the clearest traffic lever.',warn:''},
   widget:{key:'label',metric:'goodRate',label:'Good rate (broad)',maxP:28,wide:true,
     color:d=>d.goodRate<8?'#e34948':d.label.startsWith('300×250')?'#1baf7a':'#73726c',
     insight:'300×250-CreditSolutions leads at 23.7%. The same creative at 302×252 drops to 12.4%. Shifting impression share toward the 300×250 format is the clearest creative lever.',
@@ -451,7 +513,19 @@ const SEG_CFG={
     insight:'OK, MA, AL, and CA lead on quality. NY and IL underperform. Geography is a secondary lever — the partner and debt filters have cleaner economics.',warn:''},
   campaign:{key:'key',metric:'goodRate',label:'Good rate (broad)',maxP:18,wide:false,
     color:()=>'#2a78d6',
-    insight:'No meaningful difference between branded (CreditSolutions logo) and generic creative. Chi² p ≈ 1.0. Whether the advertiser\'s name appears on the ad does not move conversion.',warn:''}
+    insight:'No meaningful difference between branded (CreditSolutions logo) and generic creative. Chi² p ≈ 1.0. Whether the advertiser\'s name appears on the ad does not move conversion.',warn:''},
+  adGroup:{key:'key',metric:'goodRate',label:'Good rate (broad)',maxP:30,wide:true,
+    color:d=>d.goodRate<3?'#e34948':d.goodRate>=18?'#1baf7a':'#2a78d6',
+    insight:'CRITICAL FINDING: "Student Debt" (n=387, 2.5% good rate) and "Loan Default" (n=71, 1.4%) are catastrophically underperforming — 5–8× below baseline. These keyword groups attract people with student loan debt or defaulted loans, who don\'t qualify for the debt settlement program. Chi² p < 0.000001. Pausing these AdGroups alone moves quality to 9.4%.',
+    warn:'"Student Debt" is the single largest volume AdGroup (387 leads) and the worst performer. It should be paused immediately. "Loan Default" (71 leads, 1.4%) is similarly irrelevant to the advertiser\'s product.'},
+  trafficType:{key:'key',metric:'closedRate',label:'Closed rate',maxP:15,wide:false,
+    color:d=>d.key==='Display / Content'?'#e34948':d.key==='Search'?'#1baf7a':'#2a78d6',
+    insight:'NEW FINDING: Search traffic (people actively searching for debt help) closes at 9.4% vs Display/Content at 4.8% — nearly 2× better. Chi² p = 0.0004. This directly answers "what kind of ad did they see": a search ad triggered by active intent vs a passive banner on an article page.',
+    warn:'Display/Content n=648 leads at 4.8% closed — worst traffic type. Classified from ReferralDomain: doubleclick.net, googlesyndication.com, ehow.com, ezinearticles.com, etc.'},
+  landingPage:{key:'key',metric:'closedRate',label:'Closed rate',maxP:15,wide:true,
+    color:d=>d.key==='index12.html'?'#e34948':d.key==='index8.html'?'#1baf7a':'#2a78d6',
+    insight:'NEW FINDING: Landing pages differ significantly in quality (Chi² p = 0.025). index8.html (the main page, 2,532 leads) converts at 8.3%. index11.html drops to 7.0%. index12.html is dramatically worse at only 1.6% — 5× below baseline. This is a design or targeting problem worth investigating urgently.',
+    warn:'index12.html: only 2 closed leads from 124. If this page is still live, pause or redesign it immediately.'}
 };
 
 function showSeg(id, btn, preData){
@@ -477,13 +551,14 @@ function showSeg(id, btn, preData){
   document.getElementById('seg-body').innerHTML=html;
 }
 
-// ── Scenario bars (static — based on full dataset) ────────────────────────────
+// ── Scenario bars — updated with 3-lever analysis ────────────────────────────
 const SCENARIOS=[
-  {label:'Baseline (all leads)',n:3021,rate:8.1},
-  {label:'Drop Google Content Network',n:2382,rate:9.2},
-  {label:'Drop extreme debt (<$10k, >$100k)',n:2388,rate:9.0},
-  {label:'Both filters combined',n:1890,rate:10.3},
-  {label:'Both + top-5 widgets',n:500,rate:12.0}
+  {label:'Baseline (all leads)',                               n:3021, rate:8.1},
+  {label:'Lever 1: Drop Google Content Network',               n:2382, rate:9.2},
+  {label:'Lever 2: Drop extreme debt (<$10k, >$100k)',         n:2388, rate:9.0},
+  {label:'Lever 3: Pause Student Debt + Loan Default AdGroups',n:2560, rate:9.4},
+  {label:'Levers 1 + 3 (traffic + keyword)',                   n:2190, rate:9.9},
+  {label:'Levers 1 + 2 + 3 (all three filters)',               n:1737, rate:11.1},
 ];
 const TARGET=9.6, MAX_S=14;
 
